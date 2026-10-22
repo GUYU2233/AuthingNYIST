@@ -13,13 +13,16 @@ public static class NativeSmoke {
  public delegate bool EnumProc(IntPtr h, IntPtr p);
  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h,EnumProc callback,IntPtr p);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,System.Text.StringBuilder text,int max);
- [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h,System.Text.StringBuilder text,int max);
  public static IntPtr FindChild(IntPtr parent,string cls,string caption) {
    IntPtr found=IntPtr.Zero;
    EnumChildWindows(parent,(h,p)=> {
      var c=new System.Text.StringBuilder(256); var t=new System.Text.StringBuilder(512);
-     GetClassName(h,c,c.Capacity); GetWindowText(h,t,t.Capacity);
-     if ((cls==null || string.Equals(c.ToString(),cls,StringComparison.OrdinalIgnoreCase)) && (caption==null || t.ToString()==caption)) { found=h; return false; }
+     GetClassName(h,c,c.Capacity);
+     // GetWindowText cannot read another process's child-control text.
+     // WM_GETTEXT is marshalled by Windows for these standard controls.
+     ComboText(h,0x000D,(IntPtr)t.Capacity,t);
+     // PowerShell converts $null to an empty string for string parameters.
+     if ((string.IsNullOrEmpty(cls) || string.Equals(c.ToString(),cls,StringComparison.OrdinalIgnoreCase)) && (string.IsNullOrEmpty(caption) || t.ToString()==caption)) { found=h; return false; }
      return true;
    },IntPtr.Zero);
    return found;
@@ -77,8 +80,7 @@ try {
     if ($checkbox -eq [IntPtr]::Zero) { throw 'Native background checkbox missing' }
     # BM_CLICK invokes the actual click handler; BM_SETCHECK alone would not.
     $null = [NativeSmoke]::SendMessage($checkbox,0xF5,[IntPtr]::Zero,[IntPtr]::Zero)
-    # UI Automation providers may queue Toggle asynchronously. Wait for the
-    # observed state instead of racing WM_CLOSE against the checkbox event.
+    # Verify the resulting state before closing the window.
     $deadline = [DateTime]::UtcNow.AddSeconds(5)
     while ([NativeSmoke]::SendMessage($checkbox,0xF0,[IntPtr]::Zero,[IntPtr]::Zero).ToInt32() -ne 0) {
         if ([DateTime]::UtcNow -ge $deadline) { throw 'Background checkbox did not turn off' }
