@@ -10,6 +10,20 @@ public static class NativeSmoke {
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
  [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)]
  public static extern IntPtr ComboText(IntPtr h,uint m,IntPtr w,System.Text.StringBuilder text);
+ public delegate bool EnumProc(IntPtr h, IntPtr p);
+ [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h,EnumProc callback,IntPtr p);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,System.Text.StringBuilder text,int max);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h,System.Text.StringBuilder text,int max);
+ public static IntPtr FindChild(IntPtr parent,string cls,string caption) {
+   IntPtr found=IntPtr.Zero;
+   EnumChildWindows(parent,(h,p)=> {
+     var c=new System.Text.StringBuilder(256); var t=new System.Text.StringBuilder(512);
+     GetClassName(h,c,c.Capacity); GetWindowText(h,t,t.Capacity);
+     if ((cls==null || string.Equals(c.ToString(),cls,StringComparison.OrdinalIgnoreCase)) && (caption==null || t.ToString()==caption)) { found=h; return false; }
+     return true;
+   },IntPtr.Zero);
+   return found;
+ }
 }
 '@
 $config = Join-Path $env:TEMP ('nyist-ui-smoke-' + [guid]::NewGuid().ToString('N') + '.json')
@@ -33,13 +47,10 @@ try {
     } while ([DateTime]::UtcNow -lt $deadline)
     if (-not $window) { throw 'Native main window missing' }
     $handle = [IntPtr]$window.Current.NativeWindowHandle
-    $names = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object {$_.Current.Name}
     # A collapsed ComboBox does not expose every item through UIA on Server.
     # Read the native model without opening a popup or changing the network.
-    $comboCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ComboBox)
-    $combo = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$comboCond)
-    if (-not $combo) { throw 'Network ComboBox missing' }
-    $comboHandle = [IntPtr]$combo.Current.NativeWindowHandle
+    $comboHandle = [NativeSmoke]::FindChild($handle,'ComboBox',$null)
+    if ($comboHandle -eq [IntPtr]::Zero) { throw 'Native network ComboBox missing' }
     $count = [NativeSmoke]::SendMessage($comboHandle,0x146,[IntPtr]::Zero,[IntPtr]::Zero).ToInt32()
     $networks = @()
     for ($i=0; $i -lt $count; $i++) {
@@ -51,7 +62,7 @@ try {
         if ($networks -notcontains $network) { throw "Missing network option: $network" }
     }
     foreach ($label in @('登录 Windows 时自动启动','后台运行（关闭窗口时保留托盘）','保存设置','连接','断开认证')) {
-        if ($names -notcontains $label) { throw "Missing control: $label" }
+        if ([NativeSmoke]::FindChild($handle,$null,$label) -eq [IntPtr]::Zero) { throw "Missing control: $label" }
     }
     'PASS native controls'
     $null = [NativeSmoke]::SendMessage($handle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
@@ -62,15 +73,14 @@ try {
     $null = [NativeSmoke]::SendMessage($handle,0x8000,[IntPtr]::Zero,[IntPtr]0x201)
     if (-not [NativeSmoke]::IsWindowVisible($handle)) { throw 'Tray callback did not open window' }
     'PASS tray left-click opens window'
-    $window = $root.FindFirst([System.Windows.Automation.TreeScope]::Children,$condition)
-    $cbCond=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,'后台运行（关闭窗口时保留托盘）')
-    $checkbox=$window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$cbCond)
-    $toggle=$checkbox.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-    $toggle.Toggle()
+    $checkbox = [NativeSmoke]::FindChild($handle,'Button','后台运行（关闭窗口时保留托盘）')
+    if ($checkbox -eq [IntPtr]::Zero) { throw 'Native background checkbox missing' }
+    # BM_CLICK invokes the actual click handler; BM_SETCHECK alone would not.
+    $null = [NativeSmoke]::SendMessage($checkbox,0xF5,[IntPtr]::Zero,[IntPtr]::Zero)
     # UI Automation providers may queue Toggle asynchronously. Wait for the
     # observed state instead of racing WM_CLOSE against the checkbox event.
     $deadline = [DateTime]::UtcNow.AddSeconds(5)
-    while ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) {
+    while ([NativeSmoke]::SendMessage($checkbox,0xF0,[IntPtr]::Zero,[IntPtr]::Zero).ToInt32() -ne 0) {
         if ([DateTime]::UtcNow -ge $deadline) { throw 'Background checkbox did not turn off' }
         Start-Sleep -Milliseconds 50
     }
