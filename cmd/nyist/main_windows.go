@@ -3,9 +3,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"flag"
 	"fmt"
+	"image/png"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -108,24 +111,37 @@ type desktop struct {
 	exiting                                      bool
 }
 
+//go:embed assets/bg.png
+var footerBackground []byte
+
 func (d *desktop) create() error {
+	im, err := png.Decode(bytes.NewReader(footerBackground))
+	if err != nil {
+		return fmt.Errorf("读取背景图片: %w", err)
+	}
+	bitmap, err := walk.NewBitmapFromImage(im)
+	if err != nil {
+		return err
+	}
+	// The bitmap must outlive paint callbacks and is released with the window.
+	var footer *walk.CustomWidget
 	index := 0
 	if d.cfg.Network == "nyist-stu" {
 		index = 1
 	}
-	err := (MainWindow{
-		AssignTo: &d.mw, Title: "NYIST Connect · 校园网助手", Size: Size{Width: 480, Height: 530}, MinSize: Size{Width: 460, Height: 510},
-		Font:   Font{Family: "Microsoft YaHei UI", PointSize: 10},
-		Layout: VBox{Margins: Margins{Left: 20, Top: 16, Right: 20, Bottom: 16}, Spacing: 12},
+	err = (MainWindow{
+		AssignTo: &d.mw, Title: "NYIST Connect · 校园网助手", Size: Size{Width: 420, Height: 490}, MinSize: Size{Width: 420, Height: 490},
+		Font:   Font{Family: "Microsoft YaHei UI", PointSize: 9},
+		Layout: VBox{Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 8}, Spacing: 6},
 		Children: []Widget{
-			Label{Text: "校园网助手", Font: Font{Family: "Microsoft YaHei UI", PointSize: 17, Bold: true}},
+			Label{Text: "校园网助手", Font: Font{Family: "Microsoft YaHei UI", PointSize: 14, Bold: true}},
 			Label{Text: "选择网络，保存账号，一键连接。"},
-			Composite{Layout: Grid{Columns: 2, Spacing: 10}, Children: []Widget{
+			Composite{Layout: Grid{Columns: 2, Spacing: 6}, Children: []Widget{
 				Label{Text: "校园网络"}, ComboBox{AssignTo: &d.network, Model: []string{"nyist-tec", "nyist-stu"}, CurrentIndex: index},
 				Label{Text: "账号"}, LineEdit{AssignTo: &d.username, Text: d.cfg.Username},
 				Label{Text: "密码"}, LineEdit{AssignTo: &d.password, Text: d.cfg.Password, PasswordMode: true},
 			}},
-			GroupBox{Title: "启动与后台", Layout: VBox{Spacing: 7}, Children: []Widget{
+			GroupBox{Title: "启动与后台", Layout: VBox{Spacing: 3}, Children: []Widget{
 				CheckBox{AssignTo: &d.autoStart, Text: "登录 Windows 时自动启动", Checked: d.cfg.AutoStart},
 				CheckBox{AssignTo: &d.startMin, Text: "启动时最小化到托盘", Checked: d.cfg.StartMinimized},
 				CheckBox{AssignTo: &d.background, Text: "后台运行（关闭窗口时保留托盘）", Checked: d.cfg.Background},
@@ -137,13 +153,26 @@ func (d *desktop) create() error {
 				PushButton{AssignTo: &d.checkButton, Text: "检查状态", OnClicked: d.check},
 				PushButton{AssignTo: &d.disconnectButton, Text: "断开认证", OnClicked: d.disconnect},
 			}},
-			TextLabel{AssignTo: &d.status, Text: "就绪", MinSize: Size{Width: 0, Height: 52}},
-			Label{Text: "密码使用 Windows DPAPI 加密；退出应用不会注销校园网。", Font: Font{PointSize: 8}},
+			TextLabel{AssignTo: &d.status, Text: "就绪", MinSize: Size{Width: 0, Height: 32}},
+			Label{Text: "密码由 Windows 加密保存；退出不会注销校园网。", Font: Font{PointSize: 8}},
+			CustomWidget{
+				AssignTo: &footer, MinSize: Size{Height: 76}, MaxSize: Size{Height: 76},
+				InvalidatesOnResize: true,
+				Paint: func(canvas *walk.Canvas, _ walk.Rectangle) error {
+					bounds := footer.ClientBounds()
+					// Preserve aspect ratio, align to the bottom, and crop the empty
+					// upper part so the supplied logo and footer remain undistorted.
+					height := bounds.Width * im.Bounds().Dy() / im.Bounds().Dx()
+					return canvas.DrawImageStretched(bitmap, walk.Rectangle{Y: bounds.Height - height, Width: bounds.Width, Height: height})
+				},
+			},
 		},
 	}).Create()
 	if err != nil {
+		bitmap.Dispose()
 		return err
 	}
+	d.mw.Disposing().Attach(func() { bitmap.Dispose() })
 	icon, err := walk.NewIconFromResourceId(2)
 	if err != nil {
 		icon = walk.IconInformation()
