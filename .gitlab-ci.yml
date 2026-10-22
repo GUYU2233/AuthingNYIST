@@ -40,8 +40,18 @@ variables:
 sast:
   stage: test
 
+# Image-pull failures happen before the analyzer starts. Retry infrastructure
+# failures only; do not retry or suppress findings from a completed scan.
+semgrep-sast:
+  retry:
+    max: 2
+    when: runner_system_failure
+
 secret_detection:
   stage: secret-detection
+  retry:
+    max: 2
+    when: runner_system_failure
 
 test_linux:
   extends: .go_cache
