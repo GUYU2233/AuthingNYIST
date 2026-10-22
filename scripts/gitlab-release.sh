@@ -125,6 +125,10 @@ with tempfile.TemporaryDirectory(prefix="gitlab-release-") as directory:
             request("PUT", link["url"], upload=dist / name)
 
     description = "Tested AuthingNYIST binaries, documentation and SHA-256 checksums. Assets are stored in the persistent GitLab Generic Package Registry."
+    if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", tag):
+        notes = Path("releases") / (tag + ".md")
+        if notes.is_file():
+            description = notes.read_text(encoding="utf-8")
     if request("GET", release_url, allow_missing=True):
         release = json.loads(response.read_text(encoding="utf-8"))
         request("PUT", release_url, {"name": tag, "description": description})

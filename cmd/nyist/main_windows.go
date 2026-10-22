@@ -123,8 +123,9 @@ func (d *desktop) create() error {
 	if err != nil {
 		return err
 	}
-	// The bitmap must outlive paint callbacks and is released with the window.
-	var footer *walk.CustomWidget
+	// Keep the full image on the client background, not in a cropped footer.
+	var backgroundBitmap *walk.Bitmap
+	var backgroundBrush *walk.BitmapBrush
 	index := 0
 	if d.cfg.Network == "nyist-stu" {
 		index = 1
@@ -132,47 +133,93 @@ func (d *desktop) create() error {
 	err = (MainWindow{
 		AssignTo: &d.mw, Title: "NYIST Connect · 校园网助手", Size: Size{Width: 420, Height: 490}, MinSize: Size{Width: 420, Height: 490},
 		Font:   Font{Family: "Microsoft YaHei UI", PointSize: 9},
-		Layout: VBox{Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 8}, Spacing: 6},
+		Layout: VBox{MarginsZero: true, SpacingZero: true},
 		Children: []Widget{
-			Label{Text: "校园网助手", Font: Font{Family: "Microsoft YaHei UI", PointSize: 14, Bold: true}},
-			Label{Text: "选择网络，保存账号，一键连接。"},
-			Composite{Layout: Grid{Columns: 2, Spacing: 6}, Children: []Widget{
-				Label{Text: "校园网络"}, ComboBox{AssignTo: &d.network, Model: []string{"nyist-tec", "nyist-stu"}, CurrentIndex: index},
-				Label{Text: "账号"}, LineEdit{AssignTo: &d.username, Text: d.cfg.Username},
-				Label{Text: "密码"}, LineEdit{AssignTo: &d.password, Text: d.cfg.Password, PasswordMode: true},
+			Composite{Background: TransparentBrush{}, Layout: VBox{Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 8}, Spacing: 6}, Children: []Widget{
+				Label{Text: "校园网助手", Font: Font{Family: "Microsoft YaHei UI", PointSize: 14, Bold: true}},
+				Label{Text: "选择网络，保存账号，一键连接。"},
+				Composite{Background: TransparentBrush{}, Layout: Grid{Columns: 2, Spacing: 6}, Children: []Widget{
+					Label{Text: "校园网络"}, ComboBox{AssignTo: &d.network, Model: []string{"nyist-tec", "nyist-stu"}, CurrentIndex: index},
+					Label{Text: "账号"}, LineEdit{AssignTo: &d.username, Text: d.cfg.Username},
+					Label{Text: "密码"}, LineEdit{AssignTo: &d.password, Text: d.cfg.Password, PasswordMode: true},
+				}},
+				GroupBox{Title: "启动与后台", Background: TransparentBrush{}, Layout: VBox{Spacing: 3}, Children: []Widget{
+					CheckBox{AssignTo: &d.autoStart, Text: "登录 Windows 时自动启动", Checked: d.cfg.AutoStart},
+					CheckBox{AssignTo: &d.startMin, Text: "启动时最小化到托盘", Checked: d.cfg.StartMinimized},
+					CheckBox{AssignTo: &d.background, Text: "后台运行（关闭窗口时保留托盘）", Checked: d.cfg.Background},
+					CheckBox{AssignTo: &d.autoConnect, Text: "启动后自动连接并保持在线", Checked: d.cfg.AutoConnect},
+				}},
+				Composite{Background: TransparentBrush{}, Layout: HBox{}, Children: []Widget{
+					PushButton{Text: "保存设置", OnClicked: func() { d.save(true) }},
+					PushButton{AssignTo: &d.connectButton, Text: "连接", OnClicked: d.connect},
+					PushButton{AssignTo: &d.checkButton, Text: "检查状态", OnClicked: d.check},
+					PushButton{AssignTo: &d.disconnectButton, Text: "断开认证", OnClicked: d.disconnect},
+				}},
+				TextLabel{AssignTo: &d.status, Text: "就绪", MinSize: Size{Width: 0, Height: 32}},
+				Label{Text: "密码由 Windows 加密保存；退出不会注销校园网。", Font: Font{PointSize: 8}},
 			}},
-			GroupBox{Title: "启动与后台", Layout: VBox{Spacing: 3}, Children: []Widget{
-				CheckBox{AssignTo: &d.autoStart, Text: "登录 Windows 时自动启动", Checked: d.cfg.AutoStart},
-				CheckBox{AssignTo: &d.startMin, Text: "启动时最小化到托盘", Checked: d.cfg.StartMinimized},
-				CheckBox{AssignTo: &d.background, Text: "后台运行（关闭窗口时保留托盘）", Checked: d.cfg.Background},
-				CheckBox{AssignTo: &d.autoConnect, Text: "启动后自动连接并保持在线", Checked: d.cfg.AutoConnect},
-			}},
-			Composite{Layout: HBox{}, Children: []Widget{
-				PushButton{Text: "保存设置", OnClicked: func() { d.save(true) }},
-				PushButton{AssignTo: &d.connectButton, Text: "连接", OnClicked: d.connect},
-				PushButton{AssignTo: &d.checkButton, Text: "检查状态", OnClicked: d.check},
-				PushButton{AssignTo: &d.disconnectButton, Text: "断开认证", OnClicked: d.disconnect},
-			}},
-			TextLabel{AssignTo: &d.status, Text: "就绪", MinSize: Size{Width: 0, Height: 32}},
-			Label{Text: "密码由 Windows 加密保存；退出不会注销校园网。", Font: Font{PointSize: 8}},
-			CustomWidget{
-				AssignTo: &footer, MinSize: Size{Height: 76}, MaxSize: Size{Height: 76},
-				InvalidatesOnResize: true,
-				Paint: func(canvas *walk.Canvas, _ walk.Rectangle) error {
-					bounds := footer.ClientBounds()
-					// Preserve aspect ratio, align to the bottom, and crop the empty
-					// upper part so the supplied logo and footer remain undistorted.
-					height := bounds.Width * im.Bounds().Dy() / im.Bounds().Dx()
-					return canvas.DrawImageStretched(bitmap, walk.Rectangle{Y: bounds.Height - height, Width: bounds.Width, Height: height})
-				},
-			},
+			// The remaining client area reveals the background to the very edge.
+			VSpacer{MinSize: Size{Height: 80}},
 		},
 	}).Create()
 	if err != nil {
 		bitmap.Dispose()
 		return err
 	}
-	d.mw.Disposing().Attach(func() { bitmap.Dispose() })
+	updateBackground := func() {
+		bounds := d.mw.ClientBoundsPixels()
+		if bounds.Width <= 0 || bounds.Height <= 0 {
+			return
+		}
+		next, e := walk.NewBitmap(walk.Size{Width: bounds.Width, Height: bounds.Height})
+		if e != nil {
+			return
+		}
+		canvas, e := walk.NewCanvasFromImage(next)
+		if e != nil {
+			next.Dispose()
+			return
+		}
+		base, e := walk.NewSolidColorBrush(walk.RGB(245, 245, 245))
+		if e != nil {
+			canvas.Dispose()
+			next.Dispose()
+			return
+		}
+		e = canvas.FillRectanglePixels(base, bounds)
+		base.Dispose()
+		// Scale to client width and anchor the original composition to the bottom.
+		height := bounds.Width * im.Bounds().Dy() / im.Bounds().Dx()
+		if e == nil {
+			e = canvas.DrawImageStretchedPixels(bitmap, walk.Rectangle{Y: bounds.Height - height, Width: bounds.Width, Height: height})
+		}
+		canvas.Dispose()
+		if e != nil {
+			next.Dispose()
+			return
+		}
+		brush, e := walk.NewBitmapBrush(next)
+		if e != nil {
+			next.Dispose()
+			return
+		}
+		d.mw.SetBackground(brush)
+		if backgroundBrush != nil {
+			backgroundBrush.Dispose()
+			backgroundBitmap.Dispose()
+		}
+		backgroundBrush, backgroundBitmap = brush, next
+		d.mw.Invalidate()
+	}
+	d.mw.SizeChanged().Attach(updateBackground)
+	updateBackground()
+	d.mw.Disposing().Attach(func() {
+		if backgroundBrush != nil {
+			backgroundBrush.Dispose()
+			backgroundBitmap.Dispose()
+		}
+		bitmap.Dispose()
+	})
 	icon, err := walk.NewIconFromResourceId(2)
 	if err != nil {
 		icon = walk.IconInformation()
