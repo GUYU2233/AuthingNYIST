@@ -42,6 +42,13 @@ try {
     $checkbox=$window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$cbCond)
     $toggle=$checkbox.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
     $toggle.Toggle()
+    # UI Automation providers may queue Toggle asynchronously. Wait for the
+    # observed state instead of racing WM_CLOSE against the checkbox event.
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) {
+        if ([DateTime]::UtcNow -ge $deadline) { throw 'Background checkbox did not turn off' }
+        Start-Sleep -Milliseconds 50
+    }
     $null = [NativeSmoke]::SendMessage($handle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
     if (-not $p.WaitForExit(5000)) { throw 'Close with background disabled did not exit' }
     'PASS close exits when background is disabled'

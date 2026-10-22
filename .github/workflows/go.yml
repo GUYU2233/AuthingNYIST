@@ -25,33 +25,40 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: true
-      - name: Download dependencies
-        run: go mod download
+      - name: Download and verify dependencies
+        run: |
+          go mod download
+          go mod verify
       - name: Test
         run: go test -count=1 ./...
       - name: Vet
         run: go vet ./...
-      - name: Check formatting
+      - name: Check formatting and shell syntax
         shell: bash
         run: |
           files=$(gofmt -l cmd internal cli libauth/requests.go)
           if [ -n "$files" ]; then printf '%s\n' "$files"; exit 1; fi
+          for script in scripts/*.sh oneclick/*.sh; do bash -n "$script"; done
+      - name: Race test shared core and platform
+        if: runner.os == 'Linux'
+        run: go test -race ./internal/...
       - name: Build and smoke-test Windows GUI
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           ./scripts/build.ps1
           ./scripts/smoke-windows.ps1
-      - name: Upload Windows GUI
+      - name: Upload native Windows GUI
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: windows-gui
+          name: windows-native-smoke-tested
           path: dist/nyist-connect.exe
+          retention-days: 7
           if-no-files-found: error
 
   build:
-    name: Cross-platform binaries
+    name: Release bundle
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -60,16 +67,23 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: true
-      - name: Download dependencies
-        run: go mod download
-      - name: Build Linux application and classic CLI
+      - name: Build all platforms
         env:
           CGO_ENABLED: '0'
-        shell: bash
         run: bash scripts/build-unix.sh
-      - name: Upload Linux and classic CLI
+      - name: Package and verify checksums
+        run: bash scripts/package-release.sh
+      - name: Upload release bundle
         uses: actions/upload-artifact@v4
         with:
-          name: linux-and-classic-cli
-          path: dist/*
+          name: release-bundle
+          path: |
+            dist/nyist-connect*
+            dist/auth-nyist.*
+            dist/README.md
+            dist/NYIST-CONNECT.md
+            dist/LICENSE
+            dist/SHA256SUMS.txt
+            dist/release-assets.txt
+          retention-days: 14
           if-no-files-found: error

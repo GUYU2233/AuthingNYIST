@@ -112,8 +112,10 @@ go build -o auth-nyist ./cli
 
 ## CI 与发布
 
-- `CI`：Windows / Linux 原生测试与 `go vet`；Windows GUI 资源构建和 UI 冒烟测试；Linux amd64 / arm64 及经典 CLI 多架构构建；上传产物。
-- `Release`：推送 `v*` 标签后复用相同测试与构建，再发布二进制、使用说明和 SHA-256 校验文件。
+- **GitHub Actions**：main 提交 / PR 自动运行 Windows / Linux 测试、`go vet`、格式和脚本语法检查，Linux 共享核心 race 测试，Windows 原生 GUI 冒烟测试；通过后统一交叉编译全部发行二进制。日常构建产物 `release-bundle` 保留 14 天。
+- **校内 GitLab CI**：分支 / MR / 标签自动运行 Linux 测试、校验和全部平台交叉编译；保留 SAST 与 Secret Detection。Windows GUI 交叉编译不需要 Windows Runner，但真实 GUI 冒烟测试由 GitHub Windows Runner 执行。
+- **自动发行**：两端均在推送 `v*` 标签后发布 Windows GUI、Linux amd64 / arm64、经典 CLI 多架构、说明文档、许可证与 `SHA256SUMS.txt`。GitHub 使用内置 `GITHUB_TOKEN`；GitLab 使用内置 `CI_JOB_TOKEN` 将文件存入 Generic Package Registry，再创建永久下载链接的 Release，无需个人访问令牌。失败可重跑同一标签流水线；请勿移动或复用已公开版本标签。
+- 详细触发命令、Runner / 权限要求、校验和及失败排查见 [CI/CD 与发行指南](docs/CI-CD.md)。
 - 本地已验证 Windows GUI 与单元测试；Linux 运行时由 CI 的 Ubuntu 测试覆盖，**真实校园网络、桌面环境与 systemd 服务仍需在目标机器验证**。测试使用 mock / fake runner，不执行真实认证或服务变更。
 
 ## 来源、致谢与许可证

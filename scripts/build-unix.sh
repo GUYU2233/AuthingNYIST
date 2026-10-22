@@ -4,6 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p dist
 export CGO_ENABLED=0
+# Run resource generator for the host, then cross-compile the native GUI.
+go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -manifest cmd/nyist/app.manifest -ico cmd/nyist/app.ico -o cmd/nyist/rsrc_windows_amd64.syso
+GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-H windowsgui -s -w' -o dist/nyist-connect.exe ./cmd/nyist
 for arch in amd64 arm64; do
   GOOS=linux GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "dist/nyist-connect-linux-$arch" ./cmd/nyist
 done

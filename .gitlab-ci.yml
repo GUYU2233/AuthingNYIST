@@ -1,19 +1,69 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
-# Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/dependency_scanning_sbom/#customizing-analyzer-behavior
-# Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ci/variables/#cicd-variable-precedence
-stages:
-- test
-- secret-detection
-sast:
-  stage: test
+# Security templates are retained; their jobs use their own analyzer images.
 include:
-- template: Security/SAST.gitlab-ci.yml
-- template: Security/Secret-Detection.gitlab-ci.yml
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+image: golang:1.26-bookworm
+
+stages:
+  - test
+  - secret-detection
+  - build
+  - publish
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+
 variables:
   SECRET_DETECTION_ENABLED: 'true'
+
+sast:
+  stage: test
+
 secret_detection:
   stage: secret-detection
+
+test_linux:
+  stage: test
+  script:
+    - go mod download
+    - go mod verify
+    - go test -count=1 ./...
+    - go test -race ./internal/...
+    - go vet ./...
+    - for script in scripts/*.sh oneclick/*.sh; do bash -n "$script"; done
+    - |
+      files=$(gofmt -l cmd internal cli libauth/requests.go)
+      if [ -n "$files" ]; then printf '%s\n' "$files"; exit 1; fi
+
+build_release:
+  stage: build
+  script:
+    - go mod download
+    - bash scripts/build-unix.sh
+    - bash scripts/package-release.sh
+  artifacts:
+    name: 'authingnyist-$CI_COMMIT_REF_SLUG'
+    paths:
+      - dist/
+    expire_in: 7 days
+
+publish_release:
+  stage: publish
+  needs:
+    - job: build_release
+      artifacts: true
+  # Serialize retries/pipelines for the same tag when creating release links.
+  resource_group: 'release-$CI_COMMIT_REF_SLUG'
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+  before_script:
+    - apt-get update
+    - apt-get install --yes --no-install-recommends curl python3 ca-certificates
+  script:
+    - bash scripts/gitlab-release.sh
