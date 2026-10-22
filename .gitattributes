@@ -1,0 +1,8 @@
+* text=auto
+*.sh text eol=lf
+*.yml text eol=lf
+*.go text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.ico binary
+*.syso binary

@@ -1,0 +1,5 @@
+/auth-nyist.exe
+/oneclick/config.json
+/oneclick/.auth-session-*.json
+/dist/
+*.test

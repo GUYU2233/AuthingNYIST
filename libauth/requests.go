@@ -1,6 +1,7 @@
 package libauth
 
 import (
+	"crypto/hmac"
 	"crypto/md5"
 	"encoding/json"
 	"errors"
@@ -41,7 +42,9 @@ func buildChallengeParams(username string, anotherIP string) url.Values {
 
 func buildLoginParams(username, password, token string, logout bool, anotherIP string, acID string) (loginParams url.Values, err error) {
 	ip := anotherIP
-	hmd5 := fmt.Sprintf("%032x", md5.Sum([]byte(password)))
+	mac := hmac.New(md5.New, []byte(token))
+	_, _ = mac.Write([]byte(password))
+	hmd5 := fmt.Sprintf("%032x", mac.Sum(nil))
 
 	action := "login"
 	rawInfo := map[string]string{
@@ -114,6 +117,16 @@ func GetJSON(baseUrl string, params url.Values) (string, error) {
 }
 
 func IsOnline(host *UrlProvider, acID string) (online bool, err error, username string) {
+	// Current portals expose status directly instead of redirecting to succeed_wired.php.
+	if body, statusErr := GetJSON(host.protocol+host.host+"/cgi-bin/rad_user_info", url.Values{}); statusErr == nil {
+		var status struct {
+			Error    string `json:"error"`
+			Username string `json:"user_name"`
+		}
+		if json.Unmarshal([]byte(body), &status) == nil && status.Error == "ok" && status.Username != "" {
+			return true, nil, status.Username
+		}
+	}
 	var netClient = &http.Client{
 		Timeout: time.Second * 2,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -178,6 +191,9 @@ func LoginLogout(username, password string, host *UrlProvider, logout bool, anot
 		return
 	}
 
+	if anotherIP == "" {
+		anotherIP, _ = challResp["client_ip"].(string)
+	}
 	loginParams, err := buildLoginParams(username, password, token, logout, anotherIP, acID)
 	if err != nil {
 		return

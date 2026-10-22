@@ -99,7 +99,11 @@ func mergeCliSettings(c *cli.Context) {
 }
 
 func requestUser() (err error) {
-	if len(settings.Username) == 0 && !settings.Daemon {
+	if len(settings.Username) == 0 {
+		if settings.Daemon {
+			err = fmt.Errorf("username can't be empty (daemon mode requires a config file with credentials)")
+			return
+		}
 		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("Username: ")
 		settings.Username, _ = reader.ReadString('\n')
@@ -112,7 +116,11 @@ func requestUser() (err error) {
 }
 
 func requestPasswd() (err error) {
-	if len(settings.Password) == 0 && !settings.Daemon {
+	if len(settings.Password) == 0 {
+		if settings.Daemon {
+			err = fmt.Errorf("password can't be empty (daemon mode requires a config file with credentials)")
+			return
+		}
 		var b []byte
 		fmt.Printf("Password: ")
 		b, err = gopass.GetPasswdMasked()
@@ -290,7 +298,7 @@ func keepAliveLoop(c *cli.Context) (ret error) {
 	logger.Infof("Checking connectivity to NYIST Library...")
 
 	checkConnection := func(ip string, port int, timeout time.Duration) error {
-		address := fmt.Sprintf("%s:%d", ip, port)
+		address := net.JoinHostPort(ip, fmt.Sprint(port))
 		conn, err := net.DialTimeout("tcp", address, timeout)
 		if err != nil {
 			var nErr net.Error
@@ -348,6 +356,9 @@ func main() {
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "ip", Usage: "authenticating for specified IP address"},
 					&cli.BoolFlag{Name: "no-check, n", Usage: "skip online checking, always send login request"},
+					&cli.BoolFlag{Name: "ipv6, v", Usage: "force the host to be interpreted as IPv6-compatible (auth.nyist.edu.cn)"},
+					&cli.BoolFlag{Name: "insecure", Usage: "use http instead of https when talking to the auth server"},
+					&cli.BoolFlag{Name: "keep-online", Usage: "after a successful login, enter the keep-alive loop that re-authenticates automatically on connectivity loss"},
 				},
 				Action: cmdAuth,
 			},
