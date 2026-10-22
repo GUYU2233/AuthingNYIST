@@ -21,6 +21,21 @@ workflow:
 
 variables:
   SECRET_DETECTION_ENABLED: 'true'
+  # Campus runners cannot reliably reach proxy.golang.org. Pipe fallback also
+  # covers transport errors; checksum verification remains enabled via sumdb.
+  GOPROXY: 'https://goproxy.cn|https://proxy.golang.org|direct'
+  GOMODCACHE: '$CI_PROJECT_DIR/.cache/go-mod'
+  GOCACHE: '$CI_PROJECT_DIR/.cache/go-build'
+
+.go_cache:
+  cache:
+    key:
+      prefix: go-1.26-linux
+      files:
+        - go.sum
+    paths:
+      - .cache/go-mod/
+      - .cache/go-build/
 
 sast:
   stage: test
@@ -29,6 +44,7 @@ secret_detection:
   stage: secret-detection
 
 test_linux:
+  extends: .go_cache
   stage: test
   script:
     - go mod download
@@ -42,6 +58,7 @@ test_linux:
       if [ -n "$files" ]; then printf '%s\n' "$files"; exit 1; fi
 
 build_release:
+  extends: .go_cache
   stage: build
   script:
     - go mod download

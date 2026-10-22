@@ -8,6 +8,8 @@ using System.Runtime.InteropServices;
 public static class NativeSmoke {
  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)]
+ public static extern IntPtr ComboText(IntPtr h,uint m,IntPtr w,System.Text.StringBuilder text);
 }
 '@
 $config = Join-Path $env:TEMP ('nyist-ui-smoke-' + [guid]::NewGuid().ToString('N') + '.json')
@@ -21,11 +23,34 @@ try {
     $condition = New-Object System.Windows.Automation.AndCondition(
         (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$p.Id)),
         (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,'NYIST Connect · 校园网助手')))
-    $window = $root.FindFirst([System.Windows.Automation.TreeScope]::Children,$condition)
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $window = $root.FindFirst([System.Windows.Automation.TreeScope]::Children,$condition)
+        if ($window) { break }
+        $p.Refresh()
+        if ($p.HasExited) { throw "Application exited before main window (code $($p.ExitCode))" }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
     if (-not $window) { throw 'Native main window missing' }
     $handle = [IntPtr]$window.Current.NativeWindowHandle
     $names = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object {$_.Current.Name}
-    foreach ($label in @('nyist-tec','nyist-stu','登录 Windows 时自动启动','后台运行（关闭窗口时保留托盘）','保存设置','连接','断开认证')) {
+    # A collapsed ComboBox does not expose every item through UIA on Server.
+    # Read the native model without opening a popup or changing the network.
+    $comboCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ComboBox)
+    $combo = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$comboCond)
+    if (-not $combo) { throw 'Network ComboBox missing' }
+    $comboHandle = [IntPtr]$combo.Current.NativeWindowHandle
+    $count = [NativeSmoke]::SendMessage($comboHandle,0x146,[IntPtr]::Zero,[IntPtr]::Zero).ToInt32()
+    $networks = @()
+    for ($i=0; $i -lt $count; $i++) {
+        $text = New-Object System.Text.StringBuilder 256
+        $null = [NativeSmoke]::ComboText($comboHandle,0x148,[IntPtr]$i,$text)
+        $networks += $text.ToString()
+    }
+    foreach ($network in @('nyist-tec','nyist-stu')) {
+        if ($networks -notcontains $network) { throw "Missing network option: $network" }
+    }
+    foreach ($label in @('登录 Windows 时自动启动','后台运行（关闭窗口时保留托盘）','保存设置','连接','断开认证')) {
         if ($names -notcontains $label) { throw "Missing control: $label" }
     }
     'PASS native controls'
