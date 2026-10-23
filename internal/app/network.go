@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"net"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -52,6 +53,56 @@ func EnsureNetwork(ctx context.Context, cfg Config) error {
 		return errors.New("automatic network selection supports Windows and Linux only")
 	}
 }
+
+// localNetworkStatus is read-only. Interface addresses do not prove Internet
+// access; they only distinguish a disconnected link from an unreachable portal.
+var localNetworkStatus = inspectLocalNetwork
+
+func inspectLocalNetwork(ctx context.Context, cfg Config) (string, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", errors.New("cannot inspect local network interfaces")
+	}
+	connected := false
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, address := range addresses {
+			ip, _, err := net.ParseCIDR(address.String())
+			if err == nil && ip.IsGlobalUnicast() && !ip.IsLinkLocalUnicast() {
+				connected = true
+			}
+		}
+	}
+	if !connected {
+		return "No network connection", nil
+	}
+	if runtime.GOOS == "windows" {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		b, err := commandOutput(ctx, "netsh", "wlan", "show", "interfaces")
+		// A wired connection is valid too; don't assume disconnected solely
+		// because WLAN is unavailable or has no SSID.
+		if err == nil {
+			for _, line := range strings.Split(string(b), "\n") {
+				p := strings.SplitN(line, ":", 2)
+				if len(p) == 2 && strings.EqualFold(strings.TrimSpace(p[0]), "SSID") {
+					ssid := strings.TrimSpace(p[1])
+					if ssid != "" && ssid != cfg.Network {
+						return "Not on selected campus Wi-Fi", nil
+					}
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
 func hasSSID(output, ssid string) bool {
 	for _, line := range strings.Split(output, "\n") {
 		p := strings.SplitN(line, ":", 2)

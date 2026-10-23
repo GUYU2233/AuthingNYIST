@@ -19,6 +19,7 @@ import (
 type Status struct {
 	Online   bool
 	Username string
+	Domain   string
 	IP       string
 	Message  string
 }
@@ -30,7 +31,6 @@ var portalHTTP = &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(req
 type portalReply struct {
 	Error     string `json:"error"`
 	Res       string `json:"res"`
-	Ecode     string `json:"ecode"`
 	Challenge string `json:"challenge"`
 	ClientIP  string `json:"client_ip"`
 	Username  string `json:"user_name"`
@@ -65,6 +65,12 @@ func portalGet(ctx context.Context, cfg Config, path string, q url.Values) (port
 		return out, errors.New("cannot read portal response")
 	}
 	s := strings.TrimSpace(string(b))
+	// Some portal versions return this exact plain-text sentinel instead of JSONP.
+	// Only accept it for the read-only status endpoint, never as a login reply.
+	if path == "/cgi-bin/rad_user_info" && s == "not_online_error" {
+		out.Error = s
+		return out, nil
+	}
 	if strings.HasPrefix(s, "authing_callback(") {
 		s = strings.TrimPrefix(s, "authing_callback(")
 		s = strings.TrimSuffix(strings.TrimSuffix(s, ";"), ")")
@@ -92,6 +98,34 @@ func splitAccount(s string) (string, string) {
 	}
 	return s, ""
 }
+
+// InspectStatus adds local link diagnostics for user-facing status checks.
+// Authentication uses Check directly: a missing link must never be mistaken
+// for a confirmed offline portal session or permit an unsafe logout/login.
+func InspectStatus(ctx context.Context, cfg Config) (Status, error) {
+	if err := cfg.Validate(); err != nil {
+		return Status{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Status{}, err
+	}
+	message, err := localNetworkStatus(ctx, cfg)
+	if err != nil {
+		return Status{}, err
+	}
+	if message != "" {
+		return Status{Message: message}, nil
+	}
+	s, err := Check(ctx, cfg)
+	if err != nil {
+		if ctx.Err() != nil {
+			return Status{}, ctx.Err()
+		}
+		return Status{}, fmt.Errorf("local network connected, but campus authentication status is unavailable: %w", err)
+	}
+	return s, nil
+}
+
 func Check(ctx context.Context, cfg Config) (Status, error) {
 	var s Status
 	if e := cfg.Validate(); e != nil {
@@ -102,6 +136,7 @@ func Check(ctx context.Context, cfg Config) (Status, error) {
 		return s, e
 	}
 	s.Username = r.Username
+	s.Domain = r.Domain
 	s.IP = r.IP
 	if s.IP == "" {
 		s.IP = r.IP6
@@ -183,7 +218,44 @@ func Disconnect(ctx context.Context, cfg Config) error {
 	if !s.Online {
 		return ErrOtherAccount
 	}
-	return authenticate(ctx, cfg, true)
+	// Match the official portal: logout uses the online session's full account
+	// and IP, not a fresh challenge or the possibly unqualified configured name.
+	username := s.Username
+	if _, realm := splitAccount(username); realm == "" && s.Domain != "" {
+		username += "@" + strings.TrimPrefix(s.Domain, "@")
+	}
+	r, e := portalGet(ctx, cfg, "/cgi-bin/srun_portal", url.Values{
+		"action": {"logout"}, "username": {username}, "ip": {s.IP}, "ac_id": {cfg.AcID},
+	})
+	if e != nil {
+		return e
+	}
+	if r.Error != "ok" {
+		return errors.New("portal rejected logout; session may still be online")
+	}
+	// Do not report success until the server confirms this account is offline.
+	for attempt := 0; attempt < 4; attempt++ {
+		status, err := Check(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("cannot confirm logout: %w", err)
+		}
+		if status.Username == "" {
+			return nil
+		}
+		if !status.Online {
+			return ErrOtherAccount
+		}
+		if attempt < 3 {
+			timer := time.NewTimer(500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return errors.New("logout requested but account is still online")
 }
 func authenticate(ctx context.Context, cfg Config, logout bool) error {
 	r, e := portalGet(ctx, cfg, "/cgi-bin/get_challenge", url.Values{"username": {cfg.Username}, "ip": {""}, "double_stack": {"1"}})

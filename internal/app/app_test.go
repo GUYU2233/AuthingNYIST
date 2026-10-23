@@ -87,6 +87,49 @@ func mockPortal(t *testing.T, handler http.HandlerFunc) (Config, func()) {
 	c.Host = srv.URL
 	return c, srv.Close
 }
+func TestInspectStatusSeparatesLocalLinkAndPortal(t *testing.T) {
+	original := localNetworkStatus
+	defer func() { localNetworkStatus = original }()
+	for _, message := range []string{"No network connection", "Not on selected campus Wi-Fi", ""} {
+		t.Run(message, func(t *testing.T) {
+			localNetworkStatus = func(context.Context, Config) (string, error) { return message, nil }
+			calls := 0
+			c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Path != "/cgi-bin/rad_user_info" {
+					t.Error("status check must be read-only")
+				}
+				w.Write([]byte(`{"error":"not_online_error","ecode":0}`))
+			})
+			defer close()
+			s, err := InspectStatus(context.Background(), c)
+			if err != nil || s.Online {
+				t.Fatalf("status: %+v %v", s, err)
+			}
+			if message != "" {
+				if s.Message != message || calls != 0 {
+					t.Fatalf("disconnected link accessed portal: %+v calls=%d", s, calls)
+				}
+			} else if s.Message != "Disconnected" || calls != 1 {
+				t.Fatalf("unauthenticated status: %+v calls=%d", s, calls)
+			}
+		})
+	}
+}
+
+func TestInspectStatusDoesNotMisreportUnreachablePortalAsOffline(t *testing.T) {
+	original := localNetworkStatus
+	defer func() { localNetworkStatus = original }()
+	localNetworkStatus = func(context.Context, Config) (string, error) { return "", nil }
+	c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	defer close()
+	if _, err := InspectStatus(context.Background(), c); err == nil || !strings.Contains(err.Error(), "status is unavailable") {
+		t.Fatalf("unreachable portal must remain unknown: %v", err)
+	}
+}
+
 func TestCheckOnlyReadsAndMatchesAccount(t *testing.T) {
 	c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/cgi-bin/rad_user_info" {
@@ -116,6 +159,86 @@ func TestCheckOfflineAndJSONP(t *testing.T) {
 		t.Fatalf("offline status: %+v %v", s, e)
 	}
 }
+func TestOfflinePortalVariants(t *testing.T) {
+	for _, body := range []string{
+		`authing_callback({"error":"not_online_error","ecode":0});`,
+		`authing_callback({"error":"not_online_error","ecode":"0"});`,
+		`not_online_error`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(body))
+			})
+			defer close()
+			s, err := Check(context.Background(), c)
+			if err != nil || s.Online || s.Message != "Disconnected" {
+				t.Fatalf("offline status: %+v %v", s, err)
+			}
+		})
+	}
+}
+
+func TestOfflineConnectAuthenticatesWithNumericEcode(t *testing.T) {
+	originalCommand := commandOutput
+	defer func() { commandOutput = originalCommand }()
+	commandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "netsh" {
+			return []byte("SSID : nyist-tec\n"), nil
+		}
+		return []byte("yes:nyist-tec\n"), nil
+	}
+	loggedIn := false
+	logins := 0
+	c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cgi-bin/rad_user_info":
+			if loggedIn {
+				w.Write([]byte(`authing_callback({"error":"ok","ecode":0,"user_name":"test-user"})`))
+			} else {
+				w.Write([]byte(`authing_callback({"error":"not_online_error","ecode":0})`))
+			}
+		case "/cgi-bin/get_challenge":
+			w.Write([]byte(`authing_callback({"res":"ok","ecode":0,"challenge":"0123456789abcdef0123456789abcdef","client_ip":"192.0.2.2"})`))
+		case "/cgi-bin/srun_portal":
+			if r.URL.Query().Get("action") != "login" {
+				t.Error("expected login")
+			}
+			logins++
+			loggedIn = true
+			w.Write([]byte(`authing_callback({"error":"ok","ecode":0})`))
+		default:
+			t.Error("unexpected endpoint")
+		}
+	})
+	defer close()
+	s, err := Connect(context.Background(), c)
+	if err != nil || !s.Online || logins != 1 {
+		t.Fatalf("offline connect: %+v %v (logins=%d)", s, err, logins)
+	}
+}
+
+func TestPlainOfflineSentinelNotAcceptedForLogin(t *testing.T) {
+	c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("not_online_error"))
+	})
+	defer close()
+	if _, err := portalGet(context.Background(), c, "/cgi-bin/srun_portal", map[string][]string{}); err == nil {
+		t.Fatal("plain-text sentinel accepted for login")
+	}
+}
+
+func TestInvalidStatusIsNotOffline(t *testing.T) {
+	for _, body := range []string{`<html>captive portal</html>`, `{"ecode":0}`, `null`} {
+		c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(body))
+		})
+		if _, err := Check(context.Background(), c); err == nil {
+			t.Errorf("invalid status accepted: %s", body)
+		}
+		close()
+	}
+}
+
 func TestOnlineConnectAndCancelledRunDoNotMutate(t *testing.T) {
 	originalCommand := commandOutput
 	defer func() { commandOutput = originalCommand }()
@@ -167,6 +290,57 @@ func TestAuthenticationRejectIsTerminalAndDoesNotExposeSecrets(t *testing.T) {
 		t.Fatal("unsafe rejection handling")
 	}
 }
+func TestDisconnectUsesOnlineSessionAndConfirmsOffline(t *testing.T) {
+	for _, domain := range []string{"nyisttec", "@nyisttec"} {
+		t.Run(domain, func(t *testing.T) {
+			loggedOut := false
+			checks, logouts := 0, 0
+			c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/cgi-bin/rad_user_info":
+					checks++
+					if loggedOut {
+						w.Write([]byte(`{"error":"not_online_error","ecode":0}`))
+					} else {
+						json.NewEncoder(w).Encode(map[string]string{"error": "ok", "user_name": "test-user", "domain": domain, "online_ip": "192.0.2.8"})
+					}
+				case "/cgi-bin/srun_portal":
+					q := r.URL.Query()
+					if q.Get("action") != "logout" || q.Get("username") != "test-user@nyisttec" || q.Get("ip") != "192.0.2.8" || q.Get("ac_id") != "1" {
+						t.Errorf("incorrect session parameters: %v", q)
+					}
+					if q.Has("password") || q.Has("info") || q.Has("chksum") {
+						t.Error("logout should match official simple request")
+					}
+					logouts++
+					loggedOut = true
+					w.Write([]byte(`{"error":"ok","ecode":0}`))
+				default:
+					t.Error("logout must not fetch challenge")
+				}
+			})
+			defer close()
+			if err := Disconnect(context.Background(), c); err != nil || checks != 2 || logouts != 1 {
+				t.Fatalf("logout failed: %v checks=%d logouts=%d", err, checks, logouts)
+			}
+		})
+	}
+}
+
+func TestDisconnectDoesNotTrustSuccessWithoutOfflineStatus(t *testing.T) {
+	c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/cgi-bin/srun_portal" {
+			w.Write([]byte(`{"error":"ok"}`))
+		} else {
+			w.Write([]byte(`{"error":"ok","user_name":"test-user","online_ip":"192.0.2.8"}`))
+		}
+	})
+	defer close()
+	if err := Disconnect(context.Background(), c); err == nil || !strings.Contains(err.Error(), "still online") {
+		t.Fatalf("false logout success: %v", err)
+	}
+}
+
 func TestContextCancellationAndSanitizedTransportErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

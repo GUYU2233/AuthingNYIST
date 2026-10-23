@@ -317,7 +317,11 @@ func statusText(s app.Status) string {
 	case "Connected":
 		message = "已连接"
 	case "Disconnected":
-		message = "未连接"
+		message = "校园网未认证"
+	case "No network connection":
+		message = "未连接网络，请先连接校园 Wi-Fi 或有线网络"
+	case "Not on selected campus Wi-Fi":
+		message = "当前 Wi-Fi 不是所选校园网络，请检查网络选择"
 	case "Another account is online":
 		message = "当前在线账号与所填账号不同"
 	}
@@ -407,7 +411,7 @@ func (d *desktop) check() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		s, err := app.Check(ctx, cfg)
+		s, err := app.InspectStatus(ctx, cfg)
 		d.mw.Synchronize(func() {
 			if d.exiting {
 				return
