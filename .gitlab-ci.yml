@@ -8,6 +8,7 @@ image: golang:1.26-bookworm
 stages:
   - test
   - secret-detection
+  - native
   - build
   - publish
 
@@ -67,13 +68,41 @@ test_linux:
       files=$(gofmt -l cmd internal cli libauth/requests.go)
       if [ -n "$files" ]; then printf '%s\n' "$files"; exit 1; fi
 
+# Opt in only after registering a trusted macOS shell runner tagged 'macos'.
+# Runner host prerequisites: Go 1.26+, Xcode Command Line Tools, macOS 13+.
+macos_package:
+  stage: native
+  tags: [macos]
+  rules:
+    - if: '$ENABLE_MACOS_RUNNER == "true"'
+    - when: never
+  script:
+    - test "$(uname -s)" = Darwin
+    - go version
+    - xcode-select -p
+    - go mod download
+    - go mod verify
+    - go test -count=1 ./...
+    - go vet ./...
+    - bash scripts/build-macos.sh
+  artifacts:
+    name: 'authingnyist-macos-$CI_COMMIT_REF_SLUG'
+    paths:
+      - dist/NYIST-Connect-macos-*.dmg
+    expire_in: 14 days
+
 build_release:
   extends: .go_cache
   stage: build
   script:
     - go mod download
     - bash scripts/build-unix.sh
-    - bash scripts/package-release.sh
+    - |
+      if [ "${ENABLE_MACOS_RUNNER:-false}" = true ]; then
+        REQUIRE_MACOS_DMG=1 bash scripts/package-release.sh
+      else
+        bash scripts/package-release.sh
+      fi
   artifacts:
     name: 'authingnyist-$CI_COMMIT_REF_SLUG'
     paths:

@@ -2,11 +2,10 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -231,10 +230,29 @@ func cmdKeepalive(c *cli.Context) {
 	}
 }
 func authUtil(c *cli.Context, logout bool) error {
-	err := parseSettings(c)
-	if err != nil {
+	if err := parseSettings(c); err != nil {
 		return err
 	}
+	return authenticateAndKeepAlive(logout, authOnce, func() error { return keepAliveLoop(c) })
+}
+
+// Keep loop ownership at the command boundary, including the already-online case.
+// Re-authentication from the loop calls authOnce directly and cannot nest loops.
+func authenticateAndKeepAlive(logout bool, authenticate func(bool) error, keepAlive func() error) error {
+	if err := authenticate(logout); err != nil {
+		return err
+	}
+	if settings.KeepOn && !logout {
+		if len(settings.Ip) != 0 {
+			logger.Errorf("Cannot keep another IP online\n")
+		} else {
+			return keepAlive()
+		}
+	}
+	return nil
+}
+
+func authOnce(logout bool) error {
 	acID := "1"
 	if len(settings.AcID) != 0 {
 		acID = settings.AcID
@@ -262,7 +280,7 @@ func authUtil(c *cli.Context, logout bool) error {
 			return nil
 		}
 	}
-	err = requestUser()
+	err := requestUser()
 	if err != nil {
 		return err
 	}
@@ -281,52 +299,41 @@ func authUtil(c *cli.Context, logout bool) error {
 	if err == nil {
 		logger.Infof("%s Successfully!\n", action)
 		runHook()
-		if settings.KeepOn {
-			if len(settings.Ip) != 0 {
-				logger.Errorf("Cannot keep another IP online\n")
-			} else {
-				return keepAliveLoop(c)
-			}
-		}
 	} else {
 		err = fmt.Errorf("%s Failed: %w", action, err)
 	}
 	return err
 }
 
-func keepAliveLoop(c *cli.Context) (ret error) {
+func keepAliveLoop(_ *cli.Context) error {
 	logger.Infof("Checking connectivity to NYIST Library...")
+	probe := newLibraryProbe(libraryProbeURL, 2*time.Second)
+	defer probe.close()
+	return runKeepAlive(context.Background(), 5*time.Second, probe.check, func() error {
+		return authOnce(false)
+	})
+}
 
-	checkConnection := func(ip string, port int, timeout time.Duration) error {
-		address := net.JoinHostPort(ip, fmt.Sprint(port))
-		conn, err := net.DialTimeout("tcp", address, timeout)
-		if err != nil {
-			var nErr net.Error
-			if errors.As(err, &nErr) && nErr.Timeout() {
-				return fmt.Errorf("%s timeout", address)
-			}
-			return fmt.Errorf("connect %s error: %v", address, err)
-		}
-		_ = conn.Close()
-		logger.Debugf("connect %s success", address)
-		return nil
-	}
-
-	ip := "122.207.209.6"
-	port := 8080
-
-	interval := 5 * time.Second // 间隔
-
+// Dependencies and cancellation are explicit so retry behavior can be tested
+// without contacting the portal, waiting five seconds, or logging in for real.
+func runKeepAlive(ctx context.Context, interval time.Duration, check, authenticate func() error) error {
 	for {
-		if err := checkConnection(ip, port, 2*time.Second); err != nil {
-			logger.Warningf("Connect %s:%d error: %v", ip, port, err)
-
-			// Authhhhhing!
-			if authErr := authUtil(c, false); authErr != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := check(); err != nil {
+			logger.Warningf("Library connectivity check failed: %v", err)
+			if authErr := authenticate(); authErr != nil {
 				logger.Errorf("auth error: %v", authErr)
 			}
 		}
-		time.Sleep(interval)
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 

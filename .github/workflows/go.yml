@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -57,9 +57,28 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  macos-package:
+    name: macOS app and DMG
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - name: Build and verify macOS disk images
+        run: bash scripts/build-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/NYIST-Connect-macos-*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
   build:
     name: Release bundle
-    needs: test
+    needs: [test, macos-package]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +90,14 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: bash scripts/build-unix.sh
+      - name: Download macOS disk images
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist
       - name: Package and verify checksums
+        env:
+          REQUIRE_MACOS_DMG: '1'
         run: bash scripts/package-release.sh
       - name: Upload release bundle
         uses: actions/upload-artifact@v4
@@ -79,6 +105,7 @@ jobs:
           name: release-bundle
           path: |
             dist/nyist-connect*
+            dist/NYIST-Connect-macos-*.dmg
             dist/auth-nyist.*
             dist/README.md
             dist/NYIST-CONNECT.md

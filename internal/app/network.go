@@ -49,8 +49,10 @@ func EnsureNetwork(ctx context.Context, cfg Config) error {
 		}
 	case "linux":
 		return ensureLinuxNetwork(ctx, cfg)
+	case "darwin":
+		return ensureMacNetwork(ctx, cfg)
 	default:
-		return errors.New("automatic network selection supports Windows and Linux only")
+		return errors.New("automatic network selection supports Windows, Linux and macOS only")
 	}
 }
 

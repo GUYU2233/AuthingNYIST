@@ -10,6 +10,9 @@ GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-H windowsgui -s -w' -o d
 for arch in amd64 arm64; do
   GOOS=linux GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "dist/nyist-connect-linux-$arch" ./cmd/nyist
 done
+for arch in amd64 arm64; do
+  GOOS=darwin GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "dist/nyist-connect-macos-$arch" ./cmd/nyist
+done
 build_cli() {
   local os="$1" arch="$2" suffix="$3"
   GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "dist/auth-nyist.$suffix" ./cli

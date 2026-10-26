@@ -12,14 +12,14 @@
 
 ## 功能概览
 
-| 功能 | Windows | Linux |
-| --- | --- | --- |
-| nyist-tec / nyist-stu 选择 | 原生窗口下拉选择 | 终端交互菜单 |
-| 账号密码与配置保存 | 当前用户 DPAPI 加密密码 | 目录 0700 / 文件 0600，密码明文 |
-| 认证、状态检查、确认注销 | 窗口与托盘菜单 | 菜单与命令参数 |
-| 自动连接与在线检查 | 可选启动自动连接 | 后台守护模式 |
-| 自启动 | 当前用户登录启动 | systemd user / 显式 system 服务 |
-| 后台与退出 | 最小化到托盘、关闭留后台、右键打开/退出 | 后台 PID、systemd 服务管理 |
+| 功能 | Windows | Linux | macOS |
+| --- | --- | --- | --- |
+| nyist-tec / nyist-stu 选择 | 原生窗口下拉选择 | 终端交互菜单 | 原生窗口 / 终端菜单 |
+| 账号密码与配置保存 | 当前用户 DPAPI 加密密码 | 目录 0700 / 文件 0600，密码明文 | 文件 0600，密码明文，非 Keychain |
+| 认证、状态检查、确认注销 | 窗口与托盘菜单 | 菜单与命令参数 | 原生窗口及 CLI |
+| 自动连接与在线检查 | 可选启动自动连接 | 后台守护模式 | 连接后前台子进程保活 |
+| 自启动 | 当前用户登录启动 / 经 UAC 授权的开机认证服务 | systemd user / 显式 system 服务 | 暂不支持 |
+| 后台与退出 | 最小化到托盘、关闭留后台、右键打开/退出 | 后台 PID、systemd 服务管理 | 菜单栏后台；退出停止保活、不注销 |
 
 原有 `auth-nyist` 命令行程序及一键脚本保留；新增应用入口为 `cmd/nyist`，两者配置独立。
 
@@ -38,12 +38,31 @@
 
 1. 双击 `nyist-connect.exe`。
 2. 选择 **nyist-tec** 或 **nyist-stu**，填写账号和密码。
-3. 点击 **连接**；按需勾选登录自启动、最小化启动、后台运行、启动后自动连接。
+3. 点击 **连接**；**启动与后台** 采用纵向选项列表，按需设置登录系统时自动启动、启动时最小化到托盘、后台运行和自动连接校园网。
 4. 后台运行时，关闭窗口会保留托盘；托盘左键或右键“打开窗口”可恢复界面，右键“退出”才会退出程序。
 
 **退出程序不会注销现有认证。**“断开认证”需要确认，并停止本应用的保活。自启动仅在用户勾选并保存后启用，不会在首次打开时擅自配置。
 
+需要 **无人登录 Windows 也能认证** 时，在启动方式中勾选带管理员盾标的 **高优先级自启动**，保存并确认 UAC。它安装独立的 Windows 开机认证服务，不是 CPU 优先级或启动顺序保证；无线网络仍需预先配置为系统级、登录前可用。服务启用后由它统一处理认证，退出托盘不会停止服务；“登录后启动”只控制登录后的界面。开启、关闭和更新服务账号均需管理员授权，详见 [服务说明](NYIST-CONNECT.md#开机认证服务高优先级自启动)。
+
 默认配置：`%APPDATA%\AuthingNYIST\config.json`。密码使用当前 Windows 用户 DPAPI 加密，不可直接跨账户或电脑迁移。
+
+## macOS
+
+面向 macOS 13 及以上系统，提供 Apple Silicon（arm64）和 Intel（amd64）两个架构的原生应用与 DMG 打包流程，界面包含网络选择、账号密码、连接、状态、确认注销以及菜单栏后台。macOS 版不支持 Windows 的高优先级开机服务，也未实现登录自启动。
+
+- DMG：`NYIST-Connect-macos-arm64.dmg` / `NYIST-Connect-macos-amd64.dmg`；将应用拖入 Applications 后运行。
+- 终端版：`nyist-connect-macos-arm64` / `nyist-connect-macos-amd64`。
+- 密码按权限受限的明文配置存储（0600），**不是 Keychain 加密**；不要共享配置。
+- Wi-Fi 需要先在系统中连接并保存对应校园网络；系统隐私/网络权限可能使 SSID 被隐藏，程序此时保守拒绝认证。仅手动连接不一定解决，仍需允许读取 SSID 或使用可验证的有线默认路由。
+- 原生 Swift/DMG 必须在 macOS 上执行 `bash scripts/build-macos.sh`。GitHub CI 使用 macOS runner 打包后纳入发布附件；Windows/Linux 交叉编译只能生成 Go 内核，不能代替真实 DMG。
+- 默认仅 ad-hoc 签名，未进行 Apple Developer ID 签名或公证；Gatekeeper 可能阻止运行。请先核验来源和校验和，不要全局关闭系统安全功能。
+
+### macOS CI Runner
+
+- **GitHub Actions**：CI 使用 GitHub 托管的 `macos-latest`，运行 Go 测试，并通过 Xcode/Swift 构建双架构 app/DMG；`macos-dmg` artifact 保留 14 天，发行包必须包含两个 DMG 后才允许发布。
+- **GitLab CI**：需要自行注册 **macOS shell executor** Runner，设置标签 `macos`，安装 Go 1.26+ 和 Xcode Command Line Tools。确认 Runner 只运行可信代码后，在项目 CI/CD 变量中设置 `ENABLE_MACOS_RUNNER=true`，即可启用 `macos_package`，DMG 自动并入发行包。未启用时仅发布交叉编译的 macOS 终端版，不伪造 DMG，也不会等待不存在的 Runner。
+- Runner 注册令牌请在 GitLab 设置页面填写，不要写入仓库。此处只提供流水线配置，不会在你的机器上自动安装或注册 Runner。
 
 ## Linux 快速使用
 
@@ -77,11 +96,17 @@ chmod +x ./nyist-connect-linux-amd64
 - **SSID 不等于账号后缀**，程序不会自行拼接 `@nyist-tec` / `@nyist-stu`；按学校提供的完整账号填写。
 - 默认 HTTPS 并验证证书，不自动降级 HTTP；密码不写日志，不作为外部命令行参数传递。
 - 当前存在其他在线账号时，拒绝自动覆盖或注销，避免误断网。
-- 保活每 30 秒检查一次；连续 5 次暂时性失败后停止，认证拒绝立即停止，避免无限请求。长时间断网后需重新连接或重启后台。
+- 普通界面保活每 30 秒检查一次；连续 5 次暂时性失败后停止，认证拒绝立即停止，长时间断网后需重新连接。开机认证服务为等待登录前网络就绪，暂时性失败使用指数退避（最长 5 分钟）持续重试；认证拒绝或检测到其他账号立即暂停。
+
+## 上游问题同步
+
+- [上游 #4：TUN 下保活误判在线](https://github.com/Palvef/AuthingNYIST/issues/4)：经典 CLI 改为验证图书馆 HTTP 应用层响应，而非只检查 TCP 握手；禁用环境代理和自动跳转，拒绝门户页面、错误响应及超时。保活重认证不再递归创建循环，已在线启动也能进入保活。
+- [上游安全依赖升级 PR #3](https://github.com/Palvef/AuthingNYIST/pull/3)：升级 `golang.org/x/crypto` 至 v0.45.0，并同步兼容的 `x/sys`、`x/term`；最低 Go 版本为 1.24。
+- 经典 CLI 的探测依赖图书馆当前 `302 → /opac/search/simsearch` 同源响应；若服务改版会保守判为不可达。应用层响应并非密码学身份验证，也不代表已绕过 TUN 路由。新增 GUI / Linux 应用使用门户认证状态检查，不依赖这个图书馆探测。
 
 ## 从源码构建
 
-建议使用受支持的 Go 稳定版，CI 使用 Go 1.26。原模块路径保留 `github.com/Palvef/AuthingNYIST`，以兼容已有内部导入和上游历史，不代表本仓库归属。
+需要 Go 1.24 或更高版本（安全依赖升级的最低要求）；建议使用受支持的 Go 稳定版，CI 使用 Go 1.26。原模块路径保留 `github.com/Palvef/AuthingNYIST`，以兼容已有内部导入和上游历史，不代表本仓库归属。
 
 ### Windows
 

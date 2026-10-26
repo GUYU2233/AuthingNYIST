@@ -32,6 +32,8 @@ public static class NativeSmoke {
 $config = Join-Path $env:TEMP ('nyist-ui-smoke-' + [guid]::NewGuid().ToString('N') + '.json')
 $p = $null
 try {
+    $running = Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($Exe)) -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId }
+    if ($running) { throw 'An existing GUI owns the session. Exit it from the tray before running smoke tests; it will not be terminated automatically.' }
     $cfg = @{network='nyist-tec';username='';password='';autoStart=$false;startMinimized=$false;background=$true;autoConnect=$false;host='https://auth.nyist.edu.cn';acId='1'}
     [IO.File]::WriteAllText($config,($cfg | ConvertTo-Json))
     $p = Start-Process -FilePath (Resolve-Path $Exe).Path -ArgumentList @('--config', ('"' + $config + '"')) -PassThru
@@ -64,10 +66,11 @@ try {
     foreach ($network in @('nyist-tec','nyist-stu')) {
         if ($networks -notcontains $network) { throw "Missing network option: $network" }
     }
-    foreach ($label in @('登录 Windows 时自动启动','后台运行（关闭窗口时保留托盘）','保存设置','连接','断开认证')) {
+    foreach ($label in @('启动与后台','高优先级自启动（无需登录系统）','登录系统时自动启动','启动时自动连接校园网','启动时最小化到托盘','后台运行（关闭窗口时保留托盘）','保存设置','连接','断开认证')) {
         if ([NativeSmoke]::FindChild($handle,$null,$label) -eq [IntPtr]::Zero) { throw "Missing control: $label" }
     }
-    'PASS native controls'
+    if ([NativeSmoke]::FindChild($handle,$null,'密码由 Windows 加密保存；退出不会注销校园网。') -ne [IntPtr]::Zero) { throw 'Removed password-storage hint is still visible' }
+    'PASS grouped native controls; obsolete password hint removed'
     $null = [NativeSmoke]::SendMessage($handle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
     if ([NativeSmoke]::IsWindowVisible($handle)) { throw 'Close did not hide window' }
     $p.Refresh(); if ($p.HasExited) { throw 'Background close terminated process' }
