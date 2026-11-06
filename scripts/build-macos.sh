@@ -43,8 +43,8 @@ build_slice() {
     -module-cache-path "$TEMP/module-cache-$arch" \
     -framework SwiftUI -framework AppKit \
     "$ROOT/macos/NYISTConnect.swift" -o "$TEMP/$arch/NYIST-Connect"
-  lipo -verify_arch "$swift_arch" "$TEMP/$arch/nyist-core"
-  lipo -verify_arch "$swift_arch" "$TEMP/$arch/NYIST-Connect"
+  lipo "$TEMP/$arch/nyist-core" -verify_arch "$swift_arch"
+  lipo "$TEMP/$arch/NYIST-Connect" -verify_arch "$swift_arch"
   file "$TEMP/$arch/nyist-core" "$TEMP/$arch/NYIST-Connect"
 }
 
@@ -93,8 +93,8 @@ NOTICE
   local expected
   case "$arch" in amd64) expected=x86_64 ;; arm64) expected=arm64 ;; universal) expected='arm64 x86_64' ;; esac
   # Intentional word splitting: lipo accepts one architecture per argument.
-  lipo -verify_arch $expected "$app/Contents/MacOS/nyist-core"
-  lipo -verify_arch $expected "$app/Contents/MacOS/NYIST-Connect"
+  lipo "$app/Contents/MacOS/nyist-core" -verify_arch $expected
+  lipo "$app/Contents/MacOS/NYIST-Connect" -verify_arch $expected
   local dmg="$TEMP/NYIST-Connect-macos-$arch.dmg"
   hdiutil create -volname 'NYIST Connect' -srcfolder "$staging" -format UDZO -ov "$dmg"
   hdiutil verify "$dmg"
