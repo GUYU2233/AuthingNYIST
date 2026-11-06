@@ -40,7 +40,7 @@ jobs:
           sha256sum --check SHA256SUMS.txt
           assets=()
           while IFS= read -r file; do
-            [[ "$file" =~ ^[A-Za-z0-9._-]+$ ]] || { echo 'Invalid asset name' >&2; exit 1; }
+            [[ "$file" =~ ^[A-Za-z0-9._+~-]+$ ]] || { echo 'Invalid asset name' >&2; exit 1; }
             test -s "$file"
             assets+=("$file")
           done < release-assets.txt

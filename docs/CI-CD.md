@@ -11,6 +11,12 @@
 
 发布脚本使用明确白名单，不上传账号配置、测试程序或工作目录其他文件。发行文件包含 README、使用说明、GPL 许可证及 `SHA256SUMS.txt`。Linux 下载后执行 `chmod +x`。普通流水线产物仅用于短期下载；GitLab Release 的下载链接使用 Package Registry，不依赖会过期的构建 artifact。不要删除发行版对应的包或设置会清理它们的包保留规则。
 
+## 包管理器发行
+
+构建阶段安装 `rpm zstd libarchive-tools apt-utils createrepo-c python3`，以 tag 为 VERSION 运行 `scripts/package-distributions.sh`。非标签构建使用 `0.0.0-dev`，仅用于验证，不能当作正式包发布。产物包含 DEB / RPM / Pacman 包、AUR 配方、APT / RPM 仓库归档、Flatpak / Snap manifest 及 Homebrew / MacPorts / Nix 固定哈希配方。所有分发附件必须列入生产脚本的 manifest 后才计入 `SHA256SUMS.txt` 和 release 白名单。
+
+软件源归档默认未签名；上架商店、创建公开 tap、提交 AUR / MacPorts / nixpkgs 和部署 HTTPS 软件源不是本流程自动执行的操作。完整安装、签名与验证边界见 [包管理器与发行渠道](PACKAGING.md)。
+
 ## 发布新版本
 
 先确保两端 main 的测试通过，选择一个**未使用过**的版本号。以下为示例，执行前替换版本：

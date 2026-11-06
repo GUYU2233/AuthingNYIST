@@ -63,6 +63,9 @@ test_linux:
     - go test -count=1 ./...
     - go test -race ./internal/...
     - go vet ./...
+    - apt-get update && apt-get install --yes --no-install-recommends python3
+    - PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/recipes -v
+    - bash scripts/package-sandbox.sh test
     - for script in scripts/*.sh oneclick/*.sh; do bash -n "$script"; done
     - |
       files=$(gofmt -l cmd internal cli libauth/requests.go)
@@ -97,6 +100,9 @@ build_release:
   script:
     - go mod download
     - bash scripts/build-unix.sh
+    - apt-get update
+    - apt-get install --yes --no-install-recommends python3 rpm zstd libarchive-tools apt-utils createrepo-c
+    - VERSION="${CI_COMMIT_TAG:-0.0.0-dev}" bash scripts/package-distributions.sh
     - |
       if [ "${ENABLE_MACOS_RUNNER:-false}" = true ]; then
         REQUIRE_MACOS_DMG=1 bash scripts/package-release.sh

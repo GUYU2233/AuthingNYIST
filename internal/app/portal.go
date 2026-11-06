@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Palvef/AuthingNYIST/internal/directnet"
 	"github.com/Palvef/AuthingNYIST/libauth"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 )
 
 type Status struct {
+	Network  string
 	Online   bool
 	Username string
 	Domain   string
@@ -26,7 +28,7 @@ type Status struct {
 
 var ErrCredentials = errors.New("authentication rejected; verify account and password before retrying")
 var ErrOtherAccount = errors.New("another account is online; refusing to replace or disconnect its session")
-var portalHTTP = &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
+var portalHTTP = &http.Client{Transport: directnet.NewTransport(directnet.Options{}), Timeout: 12 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
 
 type portalReply struct {
 	Error     string `json:"error"`
@@ -114,7 +116,8 @@ func InspectStatus(ctx context.Context, cfg Config) (Status, error) {
 		return Status{}, err
 	}
 	if message != "" {
-		return Status{Message: message}, nil
+		network, _ := DetectNetwork(ctx)
+		return Status{Message: message, Network: network}, nil
 	}
 	s, err := Check(ctx, cfg)
 	if err != nil {
@@ -135,6 +138,7 @@ func Check(ctx context.Context, cfg Config) (Status, error) {
 	if e != nil {
 		return s, e
 	}
+	s.Network, _ = DetectNetwork(ctx)
 	s.Username = r.Username
 	s.Domain = r.Domain
 	s.IP = r.IP
@@ -142,7 +146,7 @@ func Check(ctx context.Context, cfg Config) (Status, error) {
 		s.IP = r.IP6
 	}
 	if r.Error == "ok" && r.Username != "" {
-		s.Online = sameAccount(cfg.Username, r.Username, r.Domain)
+		s.Online = cfg.Username == "" || sameAccount(cfg.Username, r.Username, r.Domain)
 		if s.Online {
 			s.Message = "Connected"
 		} else {

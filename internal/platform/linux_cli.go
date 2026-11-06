@@ -6,6 +6,7 @@ package platform
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/Palvef/AuthingNYIST/internal/app"
+	"github.com/Palvef/AuthingNYIST/internal/version"
 	"golang.org/x/term"
 )
 
@@ -32,8 +34,8 @@ func LinuxMain(args []string) int {
 func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet("nyist", flag.ContinueOnError)
 	flags.SetOutput(errOut)
-	var config, autostart string
-	var daemon, connect, status, disconnect, system bool
+	var config, autostart, network string
+	var daemon, connect, status, disconnect, system, statusJSON, checkUpdate, showVersion bool
 	flags.StringVar(&config, "config", "", "配置文件路径（转换为绝对路径）")
 	flags.BoolVar(&daemon, "daemon", false, "前台运行保活守护进程（供 systemd 使用）")
 	flags.BoolVar(&connect, "connect", false, "认证连接")
@@ -41,6 +43,10 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	flags.BoolVar(&disconnect, "disconnect", false, "明确登出校园网（将中断连接）")
 	flags.StringVar(&autostart, "autostart", "", "enable|disable|status，自启动但不立即连接/登出")
 	flags.BoolVar(&system, "system", false, "显式使用 root system 服务，未登录也可启动")
+	flags.StringVar(&network, "network", "", "auto|nyist-tec|nyist-stu；默认只读自动检测，不主动切换 Wi-Fi")
+	flags.BoolVar(&statusJSON, "status-json", false, "只读状态 JSON，不需要密码")
+	flags.BoolVar(&checkUpdate, "check-update", false, "检查 GitHub 最新稳定 Release（不自动安装）")
+	flags.BoolVar(&showVersion, "version", false, "显示构建版本")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -51,16 +57,26 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 		return fmt.Errorf("不支持的位置参数")
 	}
 	count := 0
-	for _, v := range []bool{daemon, connect, status, disconnect, autostart != ""} {
+	for _, v := range []bool{daemon, connect, status, disconnect, autostart != "", statusJSON, checkUpdate, showVersion} {
 		if v {
 			count++
 		}
 	}
 	if count > 1 {
-		return fmt.Errorf("--daemon/--connect/--status/--disconnect/--autostart 只能选择一个")
+		return fmt.Errorf("操作参数只能选择一个（--daemon/--connect/--status/--status-json/--disconnect/--autostart/--check-update/--version）")
 	}
 	if autostart != "" && autostart != "enable" && autostart != "disable" && autostart != "status" {
 		return fmt.Errorf("--autostart 必须是 enable、disable 或 status")
+	}
+	if showVersion {
+		fmt.Fprintln(out, version.Version)
+		return nil
+	}
+	if checkUpdate {
+		return printUpdate(context.Background(), out)
+	}
+	if network != "" && network != "auto" && network != "nyist-tec" && network != "nyist-stu" {
+		return fmt.Errorf("--network 必须是 auto、nyist-tec 或 nyist-stu")
 	}
 	var err error
 	if config == "" {
@@ -80,6 +96,11 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 		}
 		cfg = app.DefaultConfig()
 	}
+	if network != "" {
+		cfg.Network = network
+	} else {
+		cfg.Network = "auto"
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -91,7 +112,7 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	report := func(s app.Status) {
-		fmt.Fprintf(out, "在线: %t  账号: %s  IP: %s  %s\n", s.Online, s.Username, s.IP, s.Message)
+		fmt.Fprintf(out, "网络: %s  在线: %t  账号: %s  IP: %s  %s\n", s.Network, s.Online, s.Username, s.IP, s.Message)
 	}
 	save := func(c app.Config) error {
 		enabled, e := service.Enabled(ctx)
@@ -138,8 +159,11 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 		}
 		return setAuto(autostart == "enable")
 	}
-	if status {
-		s, e := app.Check(ctx, cfg)
+	if status || statusJSON {
+		s, e := app.InspectStatus(ctx, cfg)
+		if e == nil && statusJSON {
+			return json.NewEncoder(out).Encode(s)
+		}
 		if e == nil {
 			report(s)
 		}
@@ -175,7 +199,7 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	fmt.Fprintf(out, "NYIST Linux 终端\n配置: %s\n密码保存在本地配置，请保护文件；终端输入不回显。\n", config)
 	for {
-		fmt.Fprintln(out, "\n1 配置账号（nyist-tec/nyist-stu）  2 认证  3 状态\n4 登出（将中断连接）  5 启动后台保活  6 添加自启动\n7 移除自启动  8 自启动状态  9 停止 systemd 保活  0 退出")
+		fmt.Fprintln(out, "\n1 配置账号（nyist-tec/nyist-stu）  2 认证  3 状态\n4 登出（将中断连接）  5 启动后台保活  6 添加自启动\n7 移除自启动  8 自启动状态  9 停止 systemd 保活  10 检查更新  0 退出")
 		choice, e := line("选择: ")
 		if e != nil {
 			if errors.Is(e, io.EOF) {
@@ -188,12 +212,14 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 			return nil
 		case "1":
 			next := cfg
-			n, e := line("网络 [1 nyist-tec / 2 nyist-stu，默认 1]: ")
+			n, e := line("网络 [0 自动检测 / 1 nyist-tec / 2 nyist-stu，默认自动]: ")
 			if e != nil {
 				return e
 			}
 			switch n {
-			case "", "1", "nyist-tec":
+			case "", "0", "auto":
+				next.Network = "auto"
+			case "1", "nyist-tec":
 				next.Network = "nyist-tec"
 			case "2", "nyist-stu":
 				next.Network = "nyist-stu"
@@ -231,7 +257,7 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 				report(s)
 			}
 		case "3":
-			s, e := app.Check(ctx, cfg)
+			s, e := app.InspectStatus(ctx, cfg)
 			if e != nil {
 				fmt.Fprintln(out, e)
 			} else {
@@ -285,6 +311,10 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 				fmt.Fprintln(out, e)
 			} else {
 				fmt.Fprintln(out, "systemd 保活已停止（未登出）；手动后台保活请按其启动提示的 PID 发送 SIGTERM。")
+			}
+		case "10":
+			if e = printUpdate(ctx, out); e != nil {
+				fmt.Fprintln(out, e)
 			}
 		case "8":
 			linuxServiceNotice(out, system)

@@ -1,5 +1,8 @@
 # Build release binaries without installing or enabling anything.
 $ErrorActionPreference = 'Stop'
+$version = 'dev'
+if ($env:VERSION) { $version = $env:VERSION } elseif ($env:GITHUB_REF_NAME) { $version = $env:GITHUB_REF_NAME } elseif ($env:CI_COMMIT_TAG) { $version = $env:CI_COMMIT_TAG }
+$ldflags = "-s -w -X github.com/Palvef/AuthingNYIST/internal/version.Version=$version"
 $root = Split-Path $PSScriptRoot -Parent
 Push-Location $root
 $oldOS=$env:GOOS; $oldArch=$env:GOARCH; $oldCGO=$env:CGO_ENABLED
@@ -9,12 +12,12 @@ try {
     if($LASTEXITCODE -ne 0){throw 'Resource build failed'}
     go test ./...
     if($LASTEXITCODE -ne 0){throw 'Tests failed'}
-    go build -trimpath -ldflags '-H windowsgui -s -w' -o dist/nyist-connect.exe ./cmd/nyist
+    go build -trimpath -ldflags "-H windowsgui $ldflags" -o dist/nyist-connect.exe ./cmd/nyist
     if($LASTEXITCODE -ne 0){throw 'Windows build failed'}
     $env:GOOS='linux'
     foreach($arch in @('amd64','arm64')) {
         $env:GOARCH=$arch
-        go build -trimpath -ldflags '-s -w' -o "dist/nyist-connect-linux-$arch" ./cmd/nyist
+        go build -trimpath -ldflags "$ldflags" -o "dist/nyist-connect-linux-$arch" ./cmd/nyist
         if($LASTEXITCODE -ne 0){throw "Linux $arch build failed"}
     }
     Write-Host 'Built Windows amd64 and Linux amd64/arm64 in dist/.'

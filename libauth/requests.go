@@ -6,17 +6,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/Palvef/AuthingNYIST/internal/directnet"
 	"github.com/juju/loggo"
 )
 
 var logger = loggo.GetLogger("libauth")
+var authTransport = directnet.NewTransport(directnet.Options{Timeout: 2 * time.Second})
+
+// HTTP errors may embed full credential-bearing URLs. Do not wrap them.
+func requestError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New("portal request failed (network, TLS, or invalid URL)")
+}
 
 func extractJSONFromJSONP(jsonp, callbackName string) (string, error) {
 	l := len(callbackName)
@@ -92,79 +101,68 @@ func GetJSON(baseUrl string, params url.Values) (string, error) {
 	const CB = "C_a_l_l_b_a_c_k"
 	params.Set("callback", CB)
 	var netClient = &http.Client{
-		Timeout: time.Second * 2,
+		Transport:     authTransport,
+		Timeout:       time.Second * 2,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	url := baseUrl + "?" + params.Encode()
-	logger.Debugf("GET \"%s\"\n", url)
+	logger.Debugf("Sending portal GET request (URL omitted)\n")
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return "", err
+		return "", requestError(err)
 	}
 	req.Header.Set("User-Agent", "auth-nyist-cli")
 	logger.Debugf("User-Agent: auth-nyist-cli\n")
 
 	resp, err := netClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", requestError(err)
 	}
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("portal HTTP status %d", resp.StatusCode)
 	}
-	return extractJSONFromJSONP(string(body), CB)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024+1))
+	if len(body) > 1024*1024 {
+		return "", errors.New("portal response too large")
+	}
+	if err != nil {
+		return "", requestError(err)
+	}
+	text := strings.TrimSpace(string(body))
+	// Only the read-only status endpoint permits the plain offline sentinel.
+	if req.URL.Path == "/cgi-bin/rad_user_info" && text == "not_online_error" {
+		return `{"error":"not_online_error"}`, nil
+	}
+	text = strings.TrimSuffix(text, ";")
+	return extractJSONFromJSONP(text, CB)
 }
 
+// IsOnline treats only explicit portal status as authoritative. Legacy redirect
+// probing is intentionally not used: an arbitrary successful HTTP response must
+// never be interpreted as offline and trigger authentication.
 func IsOnline(host *UrlProvider, acID string) (online bool, err error, username string) {
-	// Current portals expose status directly instead of redirecting to succeed_wired.php.
-	if body, statusErr := GetJSON(host.protocol+host.host+"/cgi-bin/rad_user_info", url.Values{}); statusErr == nil {
-		var status struct {
-			Error    string `json:"error"`
-			Username string `json:"user_name"`
-		}
-		if json.Unmarshal([]byte(body), &status) == nil && status.Error == "ok" && status.Username != "" {
+	body, err := GetJSON(host.protocol+host.host+"/cgi-bin/rad_user_info", url.Values{})
+	if err != nil {
+		return false, err, ""
+	}
+	var status struct {
+		Error    string `json:"error"`
+		Username string `json:"user_name"`
+	}
+	if json.Unmarshal([]byte(body), &status) != nil {
+		return false, errors.New("invalid portal status response"), ""
+	}
+	switch status.Error {
+	case "ok":
+		if status.Username != "" {
 			return true, nil, status.Username
 		}
+	case "not_online_error", "not_online", "offline":
+		return false, nil, ""
 	}
-	var netClient = &http.Client{
-		Timeout: time.Second * 2,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			logger.Debugf("REDIRECT \"%v\"\n", req.URL)
-			if strings.Index(req.URL.Path, "succeed_wired.php") != -1 {
-				online = true
-				regexUsername := regexp.MustCompile(`username=([-a-zA-Z0-9]+)`)
-				matches := regexUsername.FindStringSubmatch(req.URL.RawQuery)
-				if len(matches) > 0 {
-					username = matches[1]
-					logger.Debugf("Extracted username: \"%s\"\n", username)
-				}
-
-			}
-			return nil
-		},
-	}
-	online = false
-	params := url.Values{
-		"ac_id": []string{acID},
-	}
-	url := host.OnlineCheckUriBase() + "?" + params.Encode()
-	logger.Debugf("GET \"%s\"\n", url)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return
-	}
-	req.Header.Set("User-Agent", "auth-nyist-cli")
-	logger.Debugf("User-Agent: auth-nyist-cli\n")
-
-	resp, err := netClient.Do(req)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	return
+	return false, errors.New("portal did not provide a valid online status"), ""
 }
 
 func LoginLogout(username, password string, host *UrlProvider, logout bool, anotherIP string, acID string) (err error) {
@@ -173,16 +171,17 @@ func LoginLogout(username, password string, host *UrlProvider, logout bool, anot
 	if err != nil {
 		return
 	}
-	logger.Debugf("Challenge response: %v\n", body)
+	logger.Debugf("Challenge response received\n")
 
 	var challResp map[string]interface{}
 	err = json.Unmarshal([]byte(body), &challResp)
 	if err != nil {
+		err = errors.New("invalid portal challenge response")
 		return
 	}
 	res, valid := challResp["res"].(string)
 	if !valid || res != "ok" {
-		err = errors.New("Failed to get challenge: " + res)
+		err = errors.New("failed to get portal challenge")
 		return
 	}
 	token, valid := challResp["challenge"].(string)
@@ -203,10 +202,11 @@ func LoginLogout(username, password string, host *UrlProvider, logout bool, anot
 	if err != nil {
 		return
 	}
-	logger.Debugf("Login response: %v\n", body)
+	logger.Debugf("Login response received\n")
 	var loginResp map[string]interface{}
 	err = json.Unmarshal([]byte(body), &loginResp)
 	if err != nil {
+		err = errors.New("invalid portal authentication response")
 		return
 	}
 	res, valid = loginResp["error"].(string)
@@ -222,7 +222,7 @@ func LoginLogout(username, password string, host *UrlProvider, logout bool, anot
 		if strerr, exist := PortalError[ecode]; exist {
 			err = errors.New(strerr)
 		} else {
-			err = errors.New(res)
+			err = errors.New("portal rejected authentication")
 		}
 	}
 

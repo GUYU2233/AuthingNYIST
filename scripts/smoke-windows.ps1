@@ -63,10 +63,10 @@ try {
         $null = [NativeSmoke]::ComboText($comboHandle,0x148,[IntPtr]$i,$text)
         $networks += $text.ToString()
     }
-    foreach ($network in @('nyist-tec','nyist-stu')) {
+    foreach ($network in @('nyist-tec','nyist-stu','auto')) {
         if ($networks -notcontains $network) { throw "Missing network option: $network" }
     }
-    foreach ($label in @('启动与后台','高优先级自启动（无需登录系统）','登录系统时自动启动','启动时自动连接校园网','启动时最小化到托盘','后台运行（关闭窗口时保留托盘）','保存设置','连接','断开认证')) {
+    foreach ($label in @('启动与后台','高优先级自启动（无需登录系统）','登录系统时自动启动','启动时自动连接校园网','启动时最小化到托盘','后台运行（关闭窗口时保留托盘）','保存设置','连接','断开认证','检查更新')) {
         if ([NativeSmoke]::FindChild($handle,$null,$label) -eq [IntPtr]::Zero) { throw "Missing control: $label" }
     }
     if ([NativeSmoke]::FindChild($handle,$null,'密码由 Windows 加密保存；退出不会注销校园网。') -ne [IntPtr]::Zero) { throw 'Removed password-storage hint is still visible' }

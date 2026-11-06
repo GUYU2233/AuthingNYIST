@@ -34,6 +34,12 @@
 | `nyist-connect-linux-arm64` | Linux ARM64 终端版 |
 | `auth-nyist.*` | 保留的经典 CLI，多架构构建 |
 
+### 包管理器安装
+
+发布流程还生成 Linux amd64 / arm64 的 **DEB（APT / dpkg）、RPM（DNF / yum / RPM / Zypper）、Pacman 包与 AUR 配方**，以及 **Flatpak、Snap、Homebrew、MacPorts、Nix** 的固定版本构建配方。提供可部署的 APT / RPM 软件源归档；不代表已上线官方软件源或商店。
+
+安装命令、架构、签名、沙盒限制与构建步骤见 [包管理器与发行渠道](docs/PACKAGING.md)。原生包安装两个 CLI，不自动启用认证服务。Flatpak / Snap 默认发布配方，不把未构建的 manifest 当作安装包。
+
 ## Windows 快速使用
 
 1. 双击 `nyist-connect.exe`。
@@ -42,6 +48,8 @@
 4. 后台运行时，关闭窗口会保留托盘；托盘左键或右键“打开窗口”可恢复界面，右键“退出”才会退出程序。
 
 **退出程序不会注销现有认证。**“断开认证”需要确认，并停止本应用的保活。自启动仅在用户勾选并保存后启用，不会在首次打开时擅自配置。
+
+Windows EXE 也提供后台网络/状态检测与启动版本检查；确认下载后校验 Release SHA256，保存到独立目录，退出托盘后手动替换，不静默覆盖运行中的程序或服务。详见 [网络识别与版本更新](NYIST-CONNECT.md#网络识别与版本更新)。
 
 需要 **无人登录 Windows 也能认证** 时，在启动方式中勾选带管理员盾标的 **高优先级自启动**，保存并确认 UAC。它安装独立的 Windows 开机认证服务，不是 CPU 优先级或启动顺序保证；无线网络仍需预先配置为系统级、登录前可用。服务启用后由它统一处理认证，退出托盘不会停止服务；“登录后启动”只控制登录后的界面。开启、关闭和更新服务账号均需管理员授权，详见 [服务说明](NYIST-CONNECT.md#开机认证服务高优先级自启动)。
 
@@ -89,6 +97,29 @@ chmod +x ./nyist-connect-linux-amd64
 - 没有 systemd 仍可交互使用或手动后台运行；注销前先停止其他保活实例。
 
 完整操作、服务限制与配置说明见 **[NYIST Connect 使用说明](NYIST-CONNECT.md)**。
+
+## CLI 自动检测、直连认证与更新检查
+
+新版 Linux / macOS 终端入口默认采用 `auto` 网络模式：读取当前已连接的 `nyist-tec` 或 `nyist-stu`，不扫描、不创建 Wi-Fi 配置，也不擅自切换网络。有线连接保留原路由；连接其他 Wi-Fi 或无法可靠读取 SSID 时给出诊断。需要主动选择已有校园 Wi-Fi 配置时，可明确传入 `--network nyist-tec` 或 `--network nyist-stu`。自动模式不会根据 SSID 修改账号后缀。
+
+```sh
+./nyist-connect-linux-amd64 --status
+./nyist-connect-linux-amd64 --status-json
+./nyist-connect-linux-amd64 --network auto --connect
+./nyist-connect-linux-amd64 --check-update
+./nyist-connect-linux-amd64 --version
+```
+
+- 状态检查不需要密码，报告当前网络、在线账号和 IP；门户不可达或响应无效不是“确认离线”。连接及注销仍拒绝操作其他账号的会话。
+- Linux 菜单与 macOS CLI 菜单增加“检查更新”，菜单配置支持自动网络模式。macOS 使用对应终端二进制和相同参数。
+- 经典 CLI 支持默认认证、`auth`、`deauth`、`status`（别名 `online`）、`check-update`，并提供 `--network`、`--host`、`--ac-id`；运行 `auth-nyist --help` 查看参数。两套 CLI 配置仍独立。
+- 认证、门户状态与经典保活 HTTP 请求明确禁用环境代理（HTTP_PROXY / HTTPS_PROXY 等），不改变系统代理设置。新连接尽量选择非虚拟的物理网卡和源地址；Linux 进一步尝试设备绑定，无权限时退回源地址绑定。**这不是对所有 TUN 的保证**：策略路由、透明拦截、虚假 DNS 及操作系统权限仍可能影响请求。其他系统目前仅源地址绑定。遇到此类情况，需要在代理软件中将校园域名及真实认证服务器 IP 配置为直连；程序不会自动关闭 TUN、提权或修改全局路由。
+- 更新检测访问 `GUYU2233/AuthingNYIST` 的 GitHub 最新稳定 Release，允许沿用环境代理以便访问 GitHub；具有超时、响应大小限制及 API 错误处理。仅提示版本及发布页面，**不自动下载、安装、执行附件**。离线或 API 限流会返回错误，不伪报“已是最新”。
+- 源码构建默认版本为 `dev`，仍显示最新 Release，但不会假定开发版落后。发布脚本从 `VERSION`、`GITHUB_REF_NAME` 或 `CI_COMMIT_TAG` 注入版本；手动构建可以使用：
+
+```sh
+go build -ldflags '-X github.com/Palvef/AuthingNYIST/internal/version.Version=v1.2.3' -o nyist-connect ./cmd/nyist
+```
 
 ## 网络要求与安全边界
 

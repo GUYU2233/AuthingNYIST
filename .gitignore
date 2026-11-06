@@ -3,3 +3,5 @@
 /oneclick/.auth-session-*.json
 /dist/
 *.test
+__pycache__/
+*.py[cod]

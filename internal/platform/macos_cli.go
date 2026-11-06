@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/Palvef/AuthingNYIST/internal/app"
+	"github.com/Palvef/AuthingNYIST/internal/version"
 	"golang.org/x/term"
 )
 
@@ -32,8 +33,8 @@ func DarwinMain(args []string) int {
 func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet("nyist", flag.ContinueOnError)
 	flags.SetOutput(errOut)
-	var path, autostart string
-	var connect, status, disconnect, daemon, statusJSON, configJSON, saveJSON, configure, system bool
+	var path, autostart, network string
+	var connect, status, disconnect, daemon, statusJSON, configJSON, saveJSON, configure, system, checkUpdate, showVersion bool
 	flags.StringVar(&path, "config", "", "配置文件路径（密码以0600权限明文保存，未使用Keychain）")
 	flags.BoolVar(&connect, "connect", false, "认证连接")
 	flags.BoolVar(&status, "status", false, "只读网络状态")
@@ -45,6 +46,9 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 	flags.BoolVar(&saveJSON, "save-config-stdin", false, "从stdin读取一个app.Config JSON，0600原子保存；stdout为空")
 	flags.StringVar(&autostart, "autostart", "", "unsupported：本版本不支持launchd自启动")
 	flags.BoolVar(&system, "system", false, "unsupported：本版本不支持系统服务")
+	flags.StringVar(&network, "network", "", "auto|nyist-tec|nyist-stu；未指定时检测当前校园 Wi-Fi")
+	flags.BoolVar(&checkUpdate, "check-update", false, "检查 GitHub 最新稳定 Release，不自动安装")
+	flags.BoolVar(&showVersion, "version", false, "显示构建版本")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -58,13 +62,23 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 		return errors.New("unsupported: macOS launchd/autostart/system service is not implemented; --daemon runs in the foreground only")
 	}
 	count := 0
-	for _, yes := range []bool{connect, status, disconnect, daemon, statusJSON, configJSON, saveJSON, configure} {
+	for _, yes := range []bool{connect, status, disconnect, daemon, statusJSON, configJSON, saveJSON, configure, checkUpdate, showVersion} {
 		if yes {
 			count++
 		}
 	}
 	if count > 1 {
 		return errors.New("只能选择一个操作参数")
+	}
+	if showVersion {
+		fmt.Fprintln(out, version.Version)
+		return nil
+	}
+	if checkUpdate {
+		return printUpdate(ctx, out)
+	}
+	if network != "" && network != "auto" && network != "nyist-tec" && network != "nyist-stu" {
+		return errors.New("--network 必须是 auto、nyist-tec 或 nyist-stu")
 	}
 	var err error
 	if path == "" {
@@ -91,8 +105,13 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 	if configJSON {
 		return json.NewEncoder(out).Encode(cfg)
 	}
+	if network != "" {
+		cfg.Network = network
+	} else {
+		cfg.Network = "auto"
+	}
 	report := func(s app.Status) {
-		fmt.Fprintf(out, "在线: %t  账号: %s  IP: %s  %s\n", s.Online, s.Username, s.IP, s.Message)
+		fmt.Fprintf(out, "网络: %s  在线: %t  账号: %s  IP: %s  %s\n", s.Network, s.Online, s.Username, s.IP, s.Message)
 	}
 	if status || statusJSON {
 		s, e := app.InspectStatus(ctx, cfg)
@@ -144,12 +163,14 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 	line := func(prompt string) (string, error) { return macReadLine(in, out, prompt) }
 	editConfig := func() error {
 		next := cfg
-		n, e := line("网络 [1 nyist-tec / 2 nyist-stu，默认1]: ")
+		n, e := line("网络 [0 自动检测 / 1 nyist-tec / 2 nyist-stu，默认自动]: ")
 		if e != nil {
 			return e
 		}
 		switch n {
-		case "", "1", "nyist-tec":
+		case "", "0", "auto":
+			next.Network = "auto"
+		case "1", "nyist-tec":
 			next.Network = "nyist-tec"
 		case "2", "nyist-stu":
 			next.Network = "nyist-stu"
@@ -181,7 +202,7 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 		return editConfig()
 	}
 	for {
-		fmt.Fprintln(out, "\n1 配置账号  2 认证  3 状态  4 登出  5 前台保活  0 退出")
+		fmt.Fprintln(out, "\n1 配置账号  2 认证  3 状态  4 登出  5 前台保活  6 检查更新  0 退出")
 		choice, e := line("选择: ")
 		if errors.Is(e, io.EOF) {
 			return nil
@@ -216,6 +237,8 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 			} else {
 				fmt.Fprintln(out, "已取消登出。")
 			}
+		case "6":
+			err = printUpdate(ctx, out)
 		case "5":
 			fmt.Fprintln(out, "前台保活；SIGINT/SIGTERM退出，不登出。")
 			err = locked(func() error { return app.Run(ctx, cfg, report) })

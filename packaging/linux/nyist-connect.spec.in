@@ -1,0 +1,28 @@
+Name: nyist-connect
+Version: @VERSION@
+Release: @RELEASE@
+Summary: NYIST campus network connector and authentication CLI
+License: GPL-3.0-or-later
+URL: https://github.com/@REPO@
+AutoReqProv: no
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+
+%description
+NYIST campus network connector and authentication CLI.
+No service activation or network authentication occurs during installation.
+
+%prep
+
+%build
+
+%install
+mkdir -p "%{buildroot}"
+cp -a "%{_sourcedir}/payload/." "%{buildroot}/"
+
+%files
+/usr/bin/nyist-connect
+/usr/bin/auth-nyist
+%license /usr/share/licenses/nyist-connect/LICENSE
+%doc /usr/share/doc/nyist-connect/README.md
+%doc /usr/share/doc/nyist-connect/NYIST-CONNECT.md

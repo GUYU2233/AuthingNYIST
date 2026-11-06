@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"net"
+	"github.com/Palvef/AuthingNYIST/internal/directnet"
 	"net/http"
 	"net/url"
 	"time"
@@ -20,15 +20,10 @@ type libraryProbe struct {
 }
 
 func newLibraryProbe(endpoint string, timeout time.Duration) *libraryProbe {
-	transport := &http.Transport{
-		// Do not use ProxyFromEnvironment: a working proxy is not evidence that
-		// this machine has a working campus session. TUN is still traversed, so
-		// require the actual application response rather than a TCP handshake.
-		Proxy:                 nil,
-		DialContext:           (&net.Dialer{Timeout: timeout}).DialContext,
-		ResponseHeaderTimeout: timeout,
-		DisableKeepAlives:     true,
-	}
+	// Direct transport ignores environment proxies and attempts physical binding;
+	// application-level response validation remains necessary for TUN/captive portals.
+	transport := directnet.NewTransport(directnet.Options{Timeout: timeout})
+	transport.DisableKeepAlives = true
 	return &libraryProbe{
 		endpoint: endpoint,
 		client: &http.Client{

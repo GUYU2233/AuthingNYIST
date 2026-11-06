@@ -12,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	campus "github.com/Palvef/AuthingNYIST/internal/app"
+	"github.com/Palvef/AuthingNYIST/internal/update"
+	"github.com/Palvef/AuthingNYIST/internal/version"
 	"github.com/Palvef/AuthingNYIST/libauth"
 	"github.com/howeyc/gopass"
 	"github.com/juju/loggo"
@@ -19,6 +22,7 @@ import (
 )
 
 type Settings struct {
+	Network  string `json:"network"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Ip       string `json:"ip"`
@@ -35,6 +39,21 @@ type Settings struct {
 
 var logger = loggo.GetLogger("auth-nyist")
 var settings Settings
+
+// Injectable boundaries keep CLI tests read-only and independent of real networks.
+var detectNetwork = campus.DetectNetwork
+var inspectStatus = campus.InspectStatus
+var checkUpdate = update.Check
+var isOnline = libauth.IsOnline
+var loginLogout = libauth.LoginLogout
+
+func optionString(c *cli.Context, name string) string {
+	if v := c.String(name); v != "" {
+		return v
+	}
+	return c.GlobalString(name)
+}
+func optionBool(c *cli.Context, name string) bool { return c.Bool(name) || c.GlobalBool(name) }
 
 func parseSettingsFile(path string) error {
 	sf, err := os.Open(path)
@@ -53,6 +72,13 @@ func parseSettingsFile(path string) error {
 
 func mergeCliSettings(c *cli.Context) {
 	var merged Settings
+	merged.Network = optionString(c, "network")
+	if merged.Network == "" {
+		merged.Network = settings.Network
+	}
+	if merged.Network == "" {
+		merged.Network = "auto"
+	}
 	merged.Username = c.GlobalString("username")
 	if len(merged.Username) == 0 {
 		merged.Username = settings.Username
@@ -61,11 +87,11 @@ func mergeCliSettings(c *cli.Context) {
 	if len(merged.Password) == 0 {
 		merged.Password = settings.Password
 	}
-	merged.Ip = c.String("ip")
+	merged.Ip = optionString(c, "ip")
 	if len(merged.Ip) == 0 {
 		merged.Ip = settings.Ip
 	}
-	merged.Host = c.String("host")
+	merged.Host = optionString(c, "host")
 	if len(merged.Host) == 0 {
 		merged.Host = settings.Host
 	}
@@ -73,13 +99,13 @@ func mergeCliSettings(c *cli.Context) {
 	if len(merged.HookSucc) == 0 {
 		merged.HookSucc = settings.HookSucc
 	}
-	merged.NoCheck = settings.NoCheck || c.Bool("no-check")
-	merged.V6 = settings.V6 || c.Bool("ipv6")
-	merged.KeepOn = settings.KeepOn || c.Bool("keep-online")
-	merged.Insecure = settings.Insecure || c.Bool("insecure")
+	merged.NoCheck = settings.NoCheck || optionBool(c, "no-check")
+	merged.V6 = settings.V6 || optionBool(c, "ipv6")
+	merged.KeepOn = settings.KeepOn || optionBool(c, "keep-online")
+	merged.Insecure = settings.Insecure || optionBool(c, "insecure")
 	merged.Daemon = settings.Daemon || c.GlobalBool("daemonize")
 	merged.Debug = settings.Debug || c.GlobalBool("debug")
-	merged.AcID = c.String("ac-id")
+	merged.AcID = optionString(c, "ac-id")
 	if len(merged.AcID) == 0 {
 		merged.AcID = settings.AcID
 	}
@@ -172,9 +198,8 @@ func locateConfigFile(c *cli.Context) (cf string) {
 }
 
 func parseSettings(c *cli.Context) (err error) {
-	if c.Bool("help") {
-		cli.ShowAppHelpAndExit(c, 0)
-	}
+
+	settings = Settings{}
 	setLoggerLevel(c.GlobalBool("debug"), c.GlobalBool("daemonize"))
 
 	cf := locateConfigFile(c)
@@ -201,26 +226,106 @@ func runHook() {
 		}
 	}
 }
-func cmdAuth(c *cli.Context) {
-	logout := c.Bool("logout")
-	err := authUtil(c, logout)
-	if err != nil {
-		logger.Errorf("Auth error: %s", err)
-		os.Exit(1)
+func cmdAuth(c *cli.Context) error {
+	if c.Bool("help") || c.GlobalBool("help") {
+		return cli.ShowAppHelp(c)
 	}
+	return authUtil(c, optionBool(c, "logout"))
 }
+func cmdDeauth(c *cli.Context) error { return authUtil(c, true) }
 
-func cmdDeauth(c *cli.Context) {
-	err := authUtil(c, true)
-	if err != nil {
-		logger.Errorf("Deauth error: %s\n", err)
-		os.Exit(1)
+// resolveNetwork only inspects the current link; classic CLI never switches Wi-Fi.
+func resolveNetwork(ctx context.Context) error {
+	switch settings.Network {
+	case "", "auto":
+		network, err := detectNetwork(ctx)
+		if err != nil {
+			return fmt.Errorf("network detection: %w (use --network nyist-tec or --network nyist-stu to select explicitly)", err)
+		}
+		settings.Network = network
+		if network == "" {
+			settings.Network = "auto"
+		}
+	case "nyist-tec", "nyist-stu":
+	default:
+		return fmt.Errorf("network must be auto, nyist-tec or nyist-stu")
 	}
+	logger.Infof("Network: %s (current connection; Wi-Fi is not changed)", settings.Network)
+	return nil
+}
+func statusConfig() campus.Config {
+	cfg := campus.DefaultConfig()
+	cfg.Network = settings.Network
+	if cfg.Network == "" {
+		cfg.Network = "auto"
+	}
+	// Status describes the current session, regardless of configured credentials.
+	if settings.Host != "" {
+		cfg.Host = settings.Host
+	}
+	if settings.Insecure && !strings.Contains(cfg.Host, "://") {
+		cfg.Host = "http://" + cfg.Host
+	}
+	if settings.Insecure {
+		cfg.Host = strings.Replace(cfg.Host, "https://", "http://", 1)
+	}
+	if settings.AcID != "" {
+		cfg.AcID = settings.AcID
+	}
+	return cfg
+}
+func cmdStatus(c *cli.Context) error {
+	if err := parseSettings(c); err != nil {
+		return err
+	}
+	if err := resolveNetwork(context.Background()); err != nil {
+		return err
+	}
+	s, err := inspectStatus(context.Background(), statusConfig())
+	if err != nil {
+		return fmt.Errorf("status unavailable: %w", err)
+	}
+	state := "offline"
+	if s.Online {
+		state = "online"
+	}
+	fmt.Fprintf(c.App.Writer, "Status: %s\nNetwork: %s\n", state, s.Network)
+	if s.Message != "" {
+		fmt.Fprintln(c.App.Writer, s.Message)
+	}
+	if s.Username != "" {
+		fmt.Fprintf(c.App.Writer, "Account: %s\n", s.Username)
+	}
+	if s.IP != "" {
+		fmt.Fprintf(c.App.Writer, "IP: %s\n", s.IP)
+	}
+	return nil
+}
+func cmdCheckUpdate(c *cli.Context) error {
+	result, err := checkUpdate(context.Background(), version.Version)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.App.Writer, "Current: %s\nLatest: %s\n", result.CurrentVersion, result.Latest.TagName)
+	switch {
+	case !result.CurrentKnown:
+		fmt.Fprintln(c.App.Writer, "Development/unknown version: cannot determine whether an update is needed.")
+	case result.UpdateAvailable:
+		fmt.Fprintln(c.App.Writer, "Update available.")
+	default:
+		fmt.Fprintln(c.App.Writer, "Already up to date.")
+	}
+	fmt.Fprintln(c.App.Writer, result.Latest.HTMLURL)
+	return nil
 }
 func cmdKeepalive(c *cli.Context) {
 	err := parseSettings(c)
 	if err != nil {
 		logger.Errorf("Parse setting error: %s\n", err)
+		os.Exit(1)
+	}
+	if err = resolveNetwork(context.Background()); err != nil {
+		logger.Errorf("Network error: %s", err)
 		os.Exit(1)
 	}
 	err = keepAliveLoop(c)
@@ -231,6 +336,9 @@ func cmdKeepalive(c *cli.Context) {
 }
 func authUtil(c *cli.Context, logout bool) error {
 	if err := parseSettings(c); err != nil {
+		return err
+	}
+	if err := resolveNetwork(context.Background()); err != nil {
 		return err
 	}
 	return authenticateAndKeepAlive(logout, authOnce, func() error { return keepAliveLoop(c) })
@@ -252,6 +360,13 @@ func authenticateAndKeepAlive(logout bool, authenticate func(bool) error, keepAl
 	return nil
 }
 
+// Bare accounts accept a portal-assigned realm; explicitly qualified accounts must match.
+func samePortalAccount(want, got string) bool {
+	w := strings.SplitN(want, "@", 2)
+	g := strings.SplitN(got, "@", 2)
+	return w[0] != "" && w[0] == g[0] && (len(w) == 1 || (len(g) == 2 && strings.EqualFold(w[1], g[1])))
+}
+
 func authOnce(logout bool) error {
 	acID := "1"
 	if len(settings.AcID) != 0 {
@@ -266,11 +381,32 @@ func authOnce(logout bool) error {
 		}
 	}
 
-	host := libauth.NewUrlProvider(domain, settings.Insecure)
+	// Accept both the historical hostname and an explicit HTTP(S) origin.
+	insecure := settings.Insecure
+	if strings.HasPrefix(domain, "http://") {
+		insecure = true
+		domain = strings.TrimPrefix(domain, "http://")
+	}
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimRight(domain, "/")
+	host := libauth.NewUrlProvider(domain, insecure)
 	if len(settings.Ip) == 0 && !settings.NoCheck {
-		online, _, username := libauth.IsOnline(host, acID)
-		if logout && online {
-			settings.Username = username
+		online, statusErr, username := isOnline(host, acID)
+		if statusErr != nil {
+			return fmt.Errorf("cannot determine portal status: %w", statusErr)
+		}
+		if online {
+			if logout && settings.Username == "" {
+				if err := requestUser(); err != nil {
+					return err
+				}
+			}
+			if settings.Username != "" && !samePortalAccount(settings.Username, username) {
+				return campus.ErrOtherAccount
+			}
+			if logout {
+				settings.Username = username
+			}
 		}
 		if online && !logout {
 			logger.Infof("Currently online!")
@@ -291,7 +427,7 @@ func authOnce(logout bool) error {
 		}
 	}
 
-	err = libauth.LoginLogout(settings.Username, settings.Password, host, logout, settings.Ip, acID)
+	err = loginLogout(settings.Username, settings.Password, host, logout, settings.Ip, acID)
 	action := "Login"
 	if logout {
 		action = "Logout"
@@ -337,15 +473,29 @@ func runKeepAlive(ctx context.Context, interval time.Duration, check, authentica
 	}
 }
 
-func main() {
-	app := &cli.App{
+func connectionFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "host", Usage: "portal hostname"},
+		&cli.StringFlag{Name: "ac-id", Usage: "portal access controller ID"},
+		&cli.StringFlag{Name: "network", Usage: "network: auto|nyist-tec|nyist-stu (never switches Wi-Fi)"},
+		&cli.StringFlag{Name: "ip", Usage: "authenticate specified IP"},
+		&cli.BoolFlag{Name: "no-check, n", Usage: "skip online check"},
+		&cli.BoolFlag{Name: "ipv6, v", Usage: "IPv6-compatible portal"},
+		&cli.BoolFlag{Name: "insecure", Usage: "use HTTP for portal"},
+		&cli.BoolFlag{Name: "keep-online", Usage: "keep authenticated connection online"},
+		&cli.BoolFlag{Name: "logout", Usage: "log out instead of logging in"},
+	}
+}
+func newCLI() *cli.App {
+	application := &cli.App{
 		Name: "auth-nyist",
 		UsageText: `auth-nyist [options]
 	 auth-nyist [options] auth [auth_options]
 	 auth-nyist [options] deauth [auth_options]
 	 auth-nyist [options] online [online_options]`,
 		Usage:    "Authenticating utility for NYIST",
-		Version:  "2.0.0",
+		Version:  version.Version,
+		Action:   cmdAuth,
 		HideHelp: true,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "username, u", Usage: "your portal account `name`"},
@@ -357,32 +507,42 @@ func main() {
 			&cli.BoolFlag{Name: "help, h", Usage: "print the help"},
 		},
 		Commands: []cli.Command{
+			{Name: "status", Aliases: []string{"online"}, Usage: "inspect current session without credentials or changing Wi-Fi", Flags: connectionFlags(), Action: cmdStatus},
+			{Name: "check-update", Usage: "check latest release (no installation)", Action: cmdCheckUpdate},
 			{
-				Name:  "auth",
-				Usage: "(default) Auth via auth.nyist.edu.cn",
-				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "ip", Usage: "authenticating for specified IP address"},
-					&cli.BoolFlag{Name: "no-check, n", Usage: "skip online checking, always send login request"},
-					&cli.BoolFlag{Name: "ipv6, v", Usage: "force the host to be interpreted as IPv6-compatible (auth.nyist.edu.cn)"},
-					&cli.BoolFlag{Name: "insecure", Usage: "use http instead of https when talking to the auth server"},
-					&cli.BoolFlag{Name: "keep-online", Usage: "after a successful login, enter the keep-alive loop that re-authenticates automatically on connectivity loss"},
-				},
+				Name:   "auth",
+				Usage:  "(default) Auth via auth.nyist.edu.cn",
+				Flags:  connectionFlags(),
 				Action: cmdAuth,
 			},
 			{
 				Name:   "deauth",
+				Flags:  connectionFlags(),
 				Usage:  "De-authenticate via auth.nyist.edu.cn",
 				Action: cmdDeauth,
 			},
 			{
 				Name:   "keepalive",
+				Flags:  connectionFlags(),
 				Usage:  "Keep the connection alive by pinging a server",
 				Action: cmdKeepalive,
 			},
 		},
 	}
 
-	err := app.Run(os.Args)
+	globalConnectionFlags := connectionFlags()
+	// -v remains the conventional global version flag; auth -v keeps IPv6 compatibility.
+	for i, flag := range globalConnectionFlags {
+		if flag.GetName() == "ipv6, v" {
+			globalConnectionFlags[i] = &cli.BoolFlag{Name: "ipv6", Usage: "IPv6-compatible portal"}
+		}
+	}
+	application.Flags = append(application.Flags, globalConnectionFlags...)
+	return application
+}
+
+func main() {
+	err := newCLI().Run(os.Args)
 	if err != nil {
 		logger.Errorf("Run error: %s\n", err)
 		os.Exit(1)

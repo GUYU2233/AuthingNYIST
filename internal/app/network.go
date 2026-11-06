@@ -24,6 +24,10 @@ func EnsureNetwork(ctx context.Context, cfg Config) error {
 	if e := cfg.Validate(); e != nil {
 		return e
 	}
+	if cfg.Network == "auto" {
+		_, err := DetectNetwork(ctx)
+		return err // Auto never selects, creates, or switches a Wi-Fi profile.
+	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	switch runtime.GOOS {
@@ -84,23 +88,15 @@ func inspectLocalNetwork(ctx context.Context, cfg Config) (string, error) {
 	if !connected {
 		return "No network connection", nil
 	}
-	if runtime.GOOS == "windows" {
-		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		b, err := commandOutput(ctx, "netsh", "wlan", "show", "interfaces")
-		// A wired connection is valid too; don't assume disconnected solely
-		// because WLAN is unavailable or has no SSID.
-		if err == nil {
-			for _, line := range strings.Split(string(b), "\n") {
-				p := strings.SplitN(line, ":", 2)
-				if len(p) == 2 && strings.EqualFold(strings.TrimSpace(p[0]), "SSID") {
-					ssid := strings.TrimSpace(p[1])
-					if ssid != "" && ssid != cfg.Network {
-						return "Not on selected campus Wi-Fi", nil
-					}
-				}
-			}
-		}
+	ssid, detectionErr := DetectNetwork(ctx)
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if detectionErr != nil && cfg.Network == "auto" {
+		return detectionErr.Error(), nil
+	}
+	if detectionErr == nil && ssid != "" && cfg.Network != "auto" && ssid != cfg.Network {
+		return "Not on selected campus Wi-Fi", nil
 	}
 	return "", nil
 }

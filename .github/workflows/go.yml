@@ -39,6 +39,11 @@ jobs:
           files=$(gofmt -l cmd internal cli libauth/requests.go)
           if [ -n "$files" ]; then printf '%s\n' "$files"; exit 1; fi
           for script in scripts/*.sh oneclick/*.sh; do bash -n "$script"; done
+      - name: Test package recipe generation
+        if: runner.os == 'Linux'
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/recipes -v
+          bash scripts/package-sandbox.sh test
       - name: Race test shared core and platform
         if: runner.os == 'Linux'
         run: go test -race ./internal/...
@@ -95,6 +100,14 @@ jobs:
         with:
           name: macos-dmg
           path: dist
+      - name: Install distribution packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm zstd libarchive-tools apt-utils createrepo-c
+      - name: Build package-manager release assets
+        env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '0.0.0-dev' }}
+        run: bash scripts/package-distributions.sh
       - name: Package and verify checksums
         env:
           REQUIRE_MACOS_DMG: '1'
@@ -109,8 +122,16 @@ jobs:
             dist/auth-nyist.*
             dist/README.md
             dist/NYIST-CONNECT.md
+            dist/PACKAGING.md
             dist/LICENSE
             dist/SHA256SUMS.txt
             dist/release-assets.txt
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/authingnyist-*.tar.gz
+            dist/nyist-connect-aur-*.tar.gz
+            dist/*.flatpak
+            dist/*.snap
           retention-days: 14
           if-no-files-found: error

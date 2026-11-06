@@ -38,7 +38,8 @@ if urlsplit(api).scheme not in ("http", "https") or urlsplit(api).username:
 # Keep this allowlist aligned with package-release.sh; never glob dist/*.
 expected = {
     "nyist-connect.exe", "nyist-connect-linux-amd64", "nyist-connect-linux-arm64",
-    "README.md", "NYIST-CONNECT.md", "LICENSE", "SHA256SUMS.txt",
+    "nyist-connect-macos-amd64", "nyist-connect-macos-arm64",
+    "README.md", "NYIST-CONNECT.md", "PACKAGING.md", "LICENSE", "SHA256SUMS.txt",
 }
 expected.update("auth-nyist." + suffix for suffix in (
     "macos.x86_64", "macos.arm64", "win64.exe", "linux.x86_64", "linux.arm64",
@@ -49,12 +50,22 @@ dist = Path("dist")
 manifest = dist / "release-assets.txt"
 if not manifest.is_file():
     fail("Missing dist/release-assets.txt; run package-release.sh first")
+# Match validated producer manifests; never admit arbitrary dist glob files.
+for producer in ("linux-assets.txt", "sandbox-assets.txt", "repositories-assets.txt", "distribution-assets.txt"):
+    source = dist / producer
+    if source.is_file():
+        for name in source.read_text(encoding="utf-8").splitlines():
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+~-]*", name):
+                fail("Unsafe distribution asset: " + name)
+            expected.add(name)
+if os.environ.get("ENABLE_MACOS_RUNNER") == "true":
+    expected.update(("NYIST-Connect-macos-amd64.dmg", "NYIST-Connect-macos-arm64.dmg"))
 assets = manifest.read_text(encoding="utf-8").splitlines()
 if len(assets) != len(set(assets)) or set(assets) != expected:
     fail("Release manifest must contain exactly the approved binaries, docs and checksums")
 for name in assets:
     path = dist / name
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", name) or path.is_symlink() or not path.is_file() or not path.stat().st_size:
+    if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", name) or path.is_symlink() or not path.is_file() or not path.stat().st_size:
         fail("Missing, empty or unsafe release asset: " + name)
 
 
@@ -72,7 +83,7 @@ def hash_stream(stream):
 
 checksums = {}
 for line in (dist / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
-    match = re.fullmatch(r"([0-9a-fA-F]{64}) [ *]([A-Za-z0-9_.-]+)", line)
+    match = re.fullmatch(r"([0-9a-fA-F]{64}) [ *]([A-Za-z0-9_.+~-]+)", line)
     if not match or match[2] in checksums:
         fail("Invalid or duplicate checksum entry")
     checksums[match[2]] = match[1].lower()

@@ -38,8 +38,8 @@ func ConfigPath() (string, error) {
 // Validate validates settings, permitting empty credentials for first-run setup.
 // Connect and Run additionally require a username and password.
 func (c Config) Validate() error {
-	if c.Network != "nyist-tec" && c.Network != "nyist-stu" {
-		return errors.New("network must be nyist-tec or nyist-stu")
+	if c.Network != "auto" && c.Network != "nyist-tec" && c.Network != "nyist-stu" {
+		return errors.New("network must be auto, nyist-tec or nyist-stu")
 	}
 	if strings.TrimSpace(c.Username) != c.Username || strings.ContainsAny(c.Username, "\r\n\t ") {
 		return errors.New("username contains whitespace")

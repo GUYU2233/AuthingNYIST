@@ -18,6 +18,7 @@ import (
 	"github.com/Palvef/AuthingNYIST/internal/app"
 	"github.com/Palvef/AuthingNYIST/internal/bootservice"
 	"github.com/Palvef/AuthingNYIST/internal/platform"
+	"github.com/Palvef/AuthingNYIST/internal/version"
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 	"github.com/lxn/win"
@@ -33,6 +34,17 @@ func main() {
 		return
 	}
 	runtime.LockOSThread()
+	// Informational flags must work even when configuration cannot be loaded.
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" || arg == "-version" {
+			walk.MsgBox(nil, "NYIST Connect", "版本: "+version.Version, walk.MsgBoxIconInformation)
+			return
+		}
+		if arg == "--check-update" || arg == "-check-update" {
+			standaloneUpdateCheck()
+			return
+		}
+	}
 	defaultPath, err := app.ConfigPath()
 	if err != nil {
 		fatal(err)
@@ -94,23 +106,9 @@ func main() {
 	} else {
 		ui.mw.Show()
 	}
-	// Defer work until the message loop exists, so synchronization is safe.
-	ui.wg.Add(1)
-	go func() {
-		defer ui.wg.Done()
-		time.Sleep(250 * time.Millisecond)
-		ui.mw.Synchronize(func() {
-			if ui.exiting || ui.busy {
-				return
-			}
-			if ui.serviceStateKnown && !ui.serviceEnabled && cfg.AutoConnect && cfg.Username != "" && cfg.Password != "" {
-				// Automatic startup uses only saved settings; never invoke UAC.
-				ui.connectSaved()
-			} else {
-				ui.check()
-			}
-		})
-	}()
+	// Startup probes are read-only; only the existing saved opt-in can authenticate.
+	ui.startup()
+	ui.checkUpdates(false)
 	ui.mw.Run()
 }
 
@@ -140,12 +138,19 @@ type desktop struct {
 	saveButton                                   *walk.PushButton
 	quitAction                                   *walk.Action
 	activeWorkers                                atomic.Int32
+	lifetime                                     context.Context
+	lifetimeCancel                               context.CancelFunc
+	updateBusy                                   bool
+	updateButton                                 *walk.PushButton
+	updateAction                                 *walk.Action
+	updateStatus                                 *walk.TextLabel
 }
 
 //go:embed assets/bg.png
 var footerBackground []byte
 
 func (d *desktop) create() error {
+	d.lifetime, d.lifetimeCancel = context.WithCancel(context.Background())
 	im, err := png.Decode(bytes.NewReader(footerBackground))
 	if err != nil {
 		return fmt.Errorf("读取背景图片: %w", err)
@@ -160,17 +165,19 @@ func (d *desktop) create() error {
 	index := 0
 	if d.cfg.Network == "nyist-stu" {
 		index = 1
+	} else if d.cfg.Network == "auto" {
+		index = 2
 	}
 	err = (MainWindow{
-		AssignTo: &d.mw, Title: "NYIST Connect · 校园网助手", Size: Size{Width: 420, Height: 490}, MinSize: Size{Width: 420, Height: 490},
+		AssignTo: &d.mw, Title: "NYIST Connect · 校园网助手", Size: Size{Width: 420, Height: 550}, MinSize: Size{Width: 420, Height: 550},
 		Font:   Font{Family: "Microsoft YaHei UI", PointSize: 9},
 		Layout: VBox{MarginsZero: true, SpacingZero: true},
 		Children: []Widget{
 			Composite{Background: TransparentBrush{}, Layout: VBox{Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 8}, Spacing: 6}, Children: []Widget{
-				Label{Text: "校园网助手", Font: Font{Family: "Microsoft YaHei UI", PointSize: 14, Bold: true}},
+				Label{Text: "校园网助手 · " + version.Version, Font: Font{Family: "Microsoft YaHei UI", PointSize: 14, Bold: true}},
 				Label{Text: "选择网络，保存账号，一键连接。"},
 				Composite{Background: TransparentBrush{}, Layout: Grid{Columns: 2, Spacing: 6}, Children: []Widget{
-					Label{Text: "校园网络"}, ComboBox{AssignTo: &d.network, Model: []string{"nyist-tec", "nyist-stu"}, CurrentIndex: index},
+					Label{Text: "校园网络"}, ComboBox{AssignTo: &d.network, Model: []string{"nyist-tec", "nyist-stu", "auto"}, CurrentIndex: index},
 					Label{Text: "账号"}, LineEdit{AssignTo: &d.username, Text: d.cfg.Username},
 					Label{Text: "密码"}, LineEdit{AssignTo: &d.password, Text: d.cfg.Password, PasswordMode: true},
 				}},
@@ -190,6 +197,10 @@ func (d *desktop) create() error {
 					PushButton{AssignTo: &d.connectButton, Text: "连接", OnClicked: d.connect},
 					PushButton{AssignTo: &d.checkButton, Text: "检查状态", OnClicked: d.check},
 					PushButton{AssignTo: &d.disconnectButton, Text: "断开认证", OnClicked: d.disconnect},
+				}},
+				Composite{Background: TransparentBrush{}, Layout: HBox{}, Children: []Widget{
+					PushButton{AssignTo: &d.updateButton, Text: "检查更新", OnClicked: func() { d.checkUpdates(true) }},
+					TextLabel{AssignTo: &d.updateStatus, Text: "更新检查尚未完成"},
 				}},
 				TextLabel{AssignTo: &d.status, Text: "就绪", MinSize: Size{Width: 0, Height: 32}},
 			}},
@@ -276,6 +287,12 @@ func (d *desktop) create() error {
 	open.SetText("打开窗口")
 	open.Triggered().Attach(d.show)
 	if err = d.tray.ContextMenu().Actions().Add(open); err != nil {
+		return err
+	}
+	d.updateAction = walk.NewAction()
+	d.updateAction.SetText("检查更新")
+	d.updateAction.Triggered().Attach(func() { d.checkUpdates(true) })
+	if err = d.tray.ContextMenu().Actions().Add(d.updateAction); err != nil {
 		return err
 	}
 	quit := walk.NewAction()
@@ -503,6 +520,9 @@ func statusText(s app.Status) string {
 	return message
 }
 func (d *desktop) stop() {
+	if d.exiting && d.lifetimeCancel != nil {
+		d.lifetimeCancel()
+	}
 	d.generation++
 	if d.cancel != nil {
 		d.cancel()
@@ -594,15 +614,17 @@ func (d *desktop) connect() {
 	d.saveWithContinuation(false, d.connectSaved)
 }
 
-func (d *desktop) connectSaved() {
+func (d *desktop) connectSaved() { d.connectConfig(d.cfg) }
+
+func (d *desktop) connectConfig(cfg app.Config) {
 	if d.busy || d.exiting || !d.refreshServiceState() {
 		return
 	}
-	d.setStatus("正在连接 " + d.cfg.Network + " …")
+	d.setStatus("正在连接 " + cfg.Network + " …")
 	service := d.serviceEnabled
 	// work increments generation synchronously before launching this closure.
 	generation := d.generation + 1
-	d.work(d.cfg, !service, func(ctx context.Context, c app.Config, report func(app.Status)) error {
+	d.work(cfg, !service, func(ctx context.Context, c app.Config, report func(app.Status)) error {
 		if service {
 			s, err := bootservice.Request("connect")
 			if err == nil {

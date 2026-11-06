@@ -3,6 +3,7 @@
 # Usage: ./scripts/build-macos.sh [arm64|amd64|all|universal] (default: all)
 set -euo pipefail
 umask 077
+VERSION="${VERSION:-${GITHUB_REF_NAME:-${CI_COMMIT_TAG:-dev}}}"
 
 if [[ "$(uname -s)" != Darwin ]]; then
   echo 'error: this script requires macOS (Swift/AppKit, codesign and hdiutil).' >&2
@@ -36,7 +37,7 @@ build_slice() {
   local arch="$1" swift_arch="$1"
   [[ "$arch" != amd64 ]] || swift_arch=x86_64
   mkdir -p "$TEMP/$arch"
-  (cd "$ROOT" && GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -o "$TEMP/$arch/nyist-core" ./cmd/nyist)
+  (cd "$ROOT" && GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="-X github.com/Palvef/AuthingNYIST/internal/version.Version=$VERSION" -o "$TEMP/$arch/nyist-core" ./cmd/nyist)
   xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library -O \
     -sdk "$SDK" -target "$swift_arch-apple-macosx13.0" \
     -module-cache-path "$TEMP/module-cache-$arch" \
@@ -82,7 +83,8 @@ Install by dragging NYIST Connect.app to Applications before opening.
 Only run one GUI/core keepalive per config; do not run an external daemon concurrently.
 NOTICE
   ln -s /Applications "$staging/Applications"
-  # umask 077 protects work-in-progress; release payload must be readable by all installers.
+  # umask 077
+VERSION="${VERSION:-${GITHUB_REF_NAME:-${CI_COMMIT_TAG:-dev}}}" protects work-in-progress; release payload must be readable by all installers.
   chmod 755 "$staging" "$app" "$app/Contents" "$app/Contents/MacOS"
   chmod 644 "$app/Contents/Info.plist" "$staging/BUILD-NOTICE.txt"
   codesign --force --sign - --timestamp=none "$app/Contents/MacOS/nyist-core"

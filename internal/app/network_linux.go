@@ -11,10 +11,10 @@ import (
 	"strings"
 )
 
-func ensureLinuxNetwork(ctx context.Context, cfg Config) error {
+var linuxWirelessPresent = func() (bool, error) {
 	entries, e := os.ReadDir("/sys/class/net")
 	if e != nil {
-		return errors.New("cannot inspect network interfaces")
+		return false, errors.New("cannot inspect network interfaces")
 	}
 	wireless := false
 	for _, d := range entries {
@@ -22,6 +22,29 @@ func ensureLinuxNetwork(ctx context.Context, cfg Config) error {
 			wireless = true
 			break
 		}
+	}
+	return wireless, nil
+}
+
+func detectLinuxNetwork(ctx context.Context) (string, error) {
+	wireless, err := linuxWirelessPresent()
+	if err != nil {
+		return "", err
+	}
+	if !wireless {
+		return "", nil
+	}
+	b, err := commandOutput(ctx, "nmcli", "-t", "--escape", "no", "-f", "ACTIVE,SSID", "device", "wifi", "list", "--rescan", "no")
+	if err != nil {
+		return "", errors.New("NetworkManager nmcli is required to inspect campus Wi-Fi; select the campus network manually")
+	}
+	return detectedSSIDs(string(b), true)
+}
+
+func ensureLinuxNetwork(ctx context.Context, cfg Config) error {
+	wireless, e := linuxWirelessPresent()
+	if e != nil {
+		return e
 	}
 	if !wireless {
 		return nil
