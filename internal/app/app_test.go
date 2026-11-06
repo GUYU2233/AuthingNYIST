@@ -178,15 +178,47 @@ func TestOfflinePortalVariants(t *testing.T) {
 	}
 }
 
-func TestOfflineConnectAuthenticatesWithNumericEcode(t *testing.T) {
-	originalCommand := commandOutput
-	defer func() { commandOutput = originalCommand }()
+// mockSelectedCampusNetwork supplies native read-only transcripts on every OS.
+// Reject unexpected commands so authentication tests cannot silently switch Wi-Fi.
+func mockSelectedCampusNetwork(t *testing.T) {
+	t.Helper()
+	original := commandOutput
+	t.Cleanup(func() { commandOutput = original })
 	commandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name == "netsh" {
-			return []byte("SSID : nyist-tec\n"), nil
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		return []byte("yes:nyist-tec\n"), nil
+		switch name + " " + strings.Join(args, " ") {
+		case "netsh wlan show interfaces":
+			return []byte("SSID : nyist-tec\n"), nil
+		case "nmcli -t --escape no -f ACTIVE,SSID device wifi list --rescan no":
+			return []byte("yes:nyist-tec\n"), nil
+		case "/usr/sbin/networksetup -listallhardwareports":
+			return []byte("Hardware Port: Wi-Fi\nDevice: en0\n"), nil
+		case "/sbin/route -n get default":
+			return []byte("interface: en0\n"), nil
+		case "/usr/sbin/networksetup -getairportnetwork en0":
+			return []byte("Current Wi-Fi Network: nyist-tec\n"), nil
+		default:
+			t.Errorf("unexpected network command: %s %v", name, args)
+			return nil, errors.New("unexpected network command")
+		}
 	}
+}
+
+func TestSelectedCampusNetworkMockSupportsMac(t *testing.T) {
+	mockSelectedCampusNetwork(t)
+	if err := ensureMacNetwork(context.Background(), testConfig()); err != nil {
+		t.Fatal(err)
+	}
+	ssid, err := detectMacNetwork(context.Background())
+	if err != nil || ssid != "nyist-tec" {
+		t.Fatalf("detected network: %q %v", ssid, err)
+	}
+}
+
+func TestOfflineConnectAuthenticatesWithNumericEcode(t *testing.T) {
+	mockSelectedCampusNetwork(t)
 	loggedIn := false
 	logins := 0
 	c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
@@ -240,14 +272,7 @@ func TestInvalidStatusIsNotOffline(t *testing.T) {
 }
 
 func TestOnlineConnectAndCancelledRunDoNotMutate(t *testing.T) {
-	originalCommand := commandOutput
-	defer func() { commandOutput = originalCommand }()
-	commandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name == "netsh" {
-			return []byte("SSID : nyist-tec\n"), nil
-		}
-		return []byte("yes:nyist-tec\n"), nil
-	}
+	mockSelectedCampusNetwork(t)
 	calls := 0
 	c, close := mockPortal(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
