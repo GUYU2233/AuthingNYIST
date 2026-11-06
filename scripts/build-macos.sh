@@ -83,8 +83,7 @@ Install by dragging NYIST Connect.app to Applications before opening.
 Only run one GUI/core keepalive per config; do not run an external daemon concurrently.
 NOTICE
   ln -s /Applications "$staging/Applications"
-  # umask 077
-VERSION="${VERSION:-${GITHUB_REF_NAME:-${CI_COMMIT_TAG:-dev}}}" protects work-in-progress; release payload must be readable by all installers.
+  # umask 077 protects work-in-progress; release payload must be readable by all installers.
   chmod 755 "$staging" "$app" "$app/Contents" "$app/Contents/MacOS"
   chmod 644 "$app/Contents/Info.plist" "$staging/BUILD-NOTICE.txt"
   codesign --force --sign - --timestamp=none "$app/Contents/MacOS/nyist-core"
