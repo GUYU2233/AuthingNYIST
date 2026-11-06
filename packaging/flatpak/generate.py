@@ -19,9 +19,8 @@ def generate(root, version, dist, out):
     version = version.removeprefix('v')
     base = f'https://github.com/GUYU2233/AuthingNYIST/releases/download/{tag}/'
     records = {}
-    for arch, classic in [('amd64', 'x86_64'), ('arm64', 'arm64')]:
-        for command, asset in [('nyist-connect', f'nyist-connect-linux-{arch}'),
-                              ('auth-nyist', f'auth-nyist.linux.{classic}')]:
+    for arch in ['amd64', 'arm64']:
+        for command, asset in [('nyist-connect', f'nyist-connect-linux-{arch}')]:
             path = dist / asset
             if not path.is_file() or path.stat().st_size == 0:
                 raise ValueError(f'Missing or empty release asset: {path}')
@@ -30,7 +29,7 @@ def generate(root, version, dist, out):
     out.mkdir(parents=True, exist_ok=True)
     for arch, fp_arch in [('amd64', 'x86_64'), ('arm64', 'aarch64')]:
         sources = []
-        for command in ['nyist-connect', 'auth-nyist']:
+        for command in ['nyist-connect']:
             asset, digest = records[(arch, command)]
             sources.append({'type': 'file', 'url': base + asset, 'sha256': digest,
                             'dest-filename': command})
@@ -42,14 +41,13 @@ def generate(root, version, dist, out):
                     'modules': [{'name': 'nyist-connect', 'buildsystem': 'simple',
                                  'build-commands': [
                                      'install -Dm755 nyist-connect /app/bin/nyist-connect',
-                                     'install -Dm755 auth-nyist /app/bin/auth-nyist',
                                      f'install -Dm644 {APP_ID}.metainfo.xml /app/share/metainfo/{APP_ID}.metainfo.xml'],
                                  'sources': sources}]}
         (out / f'{APP_ID}-{fp_arch}.json').write_text(json.dumps(manifest, indent=2) + '\n')
         snap_dir = out / f'snap-{arch}' / 'snap'
         snap_dir.mkdir(parents=True, exist_ok=True)
         parts = []
-        for command in ['nyist-connect', 'auth-nyist']:
+        for command in ['nyist-connect']:
             asset, digest = records[(arch, command)]
             parts.append(f'''  {command}:
     plugin: nil
@@ -63,7 +61,7 @@ def generate(root, version, dist, out):
 version: '{version}'
 summary: NYIST campus network terminal clients
 description: |
-  Terminal-only nyist-connect and classic auth-nyist clients.
+  Terminal-only nyist-connect client.
   No service is installed or started automatically.
 base: core24
 grade: stable
@@ -73,8 +71,6 @@ platforms:
 apps:
   nyist-connect:
     command: bin/nyist-connect
-  auth-nyist:
-    command: bin/auth-nyist
 parts:
 ''' + ''.join(parts)
         (snap_dir / 'snapcraft.yaml').write_text(recipe)

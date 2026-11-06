@@ -21,8 +21,7 @@ class GenerationTests(unittest.TestCase):
     def test_generation_and_checksums(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = pathlib.Path(tmp)
-            for name in ['nyist-connect-linux-amd64', 'nyist-connect-linux-arm64',
-                         'auth-nyist.linux.x86_64', 'auth-nyist.linux.arm64']:
+            for name in ['nyist-connect-linux-amd64', 'nyist-connect-linux-arm64']:
                 (dist / name).write_bytes(('fixture-' + name).encode())
             out = dist / 'generated'
             generator.generate(ROOT, 'v1.2.3', dist, out)
@@ -30,16 +29,19 @@ class GenerationTests(unittest.TestCase):
                 m = json.loads((out / f'{generator.APP_ID}-{arch}.json').read_text())
                 self.assertEqual(m['finish-args'], ['--share=network'])
                 self.assertEqual(m['command'], 'nyist-connect')
-                for source in m['modules'][0]['sources'][:2]:
+                self.assertNotIn('auth-nyist', json.dumps(m))
+                self.assertEqual(len(m['modules'][0]['sources']), 2)
+                for source in m['modules'][0]['sources'][:1]:
                     asset = source['url'].rsplit('/', 1)[1]
                     self.assertIn('/v1.2.3/', source['url'])
                     self.assertEqual(source['sha256'], hashlib.sha256((dist / asset).read_bytes()).hexdigest())
-                component = ET.fromstring(m['modules'][0]['sources'][2]['contents'])
+                component = ET.fromstring(m['modules'][0]['sources'][1]['contents'])
                 self.assertEqual(component.attrib['type'], 'console-application')
             for arch in ['amd64', 'arm64']:
                 recipe = (out / f'snap-{arch}/snap/snapcraft.yaml').read_text()
                 self.assertIn('confinement: classic', recipe)
-                self.assertEqual(recipe.count('source-checksum: sha256/'), 2)
+                self.assertNotIn('auth-nyist', recipe)
+                self.assertEqual(recipe.count('source-checksum: sha256/'), 1)
                 self.assertNotIn('daemon:', recipe)
                 self.assertNotIn('hooks:', recipe)
             for bad in ['latest', '../v1.2.3', '1.2', '1.2.3;id', '01.2.3', '1.2.3-01']:

@@ -41,11 +41,6 @@ expected = {
     "nyist-connect-macos-amd64", "nyist-connect-macos-arm64",
     "README.md", "NYIST-CONNECT.md", "PACKAGING.md", "LICENSE", "SHA256SUMS.txt",
 }
-expected.update("auth-nyist." + suffix for suffix in (
-    "macos.x86_64", "macos.arm64", "win64.exe", "linux.x86_64", "linux.arm64",
-    "linux.arm", "linux.armv5", "linux.armv6", "linux.mipsle", "linux.mipsbe",
-    "linux.ppc64le", "linux.riscv64", "linux.loong64",
-))
 dist = Path("dist")
 manifest = dist / "release-assets.txt"
 if not manifest.is_file():

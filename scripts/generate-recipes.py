@@ -17,8 +17,8 @@ SEMVER = re.compile(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?
 def assets(dist):
     result = {}
     for os in ("linux", "macos"):
-        for arch, classic_arch in (("amd64", "x86_64"), ("arm64", "arm64")):
-            names = (f"nyist-connect-{os}-{arch}", f"auth-nyist.{os}.{classic_arch}")
+        for arch in ("amd64", "arm64"):
+            names = (f"nyist-connect-{os}-{arch}",)
             entries = []
             for name in names:
                 path = dist / name
@@ -34,23 +34,23 @@ def assets(dist):
 
 
 def brew(version, tag, data):
-    lines = ["# Generated from release binaries; do not edit hashes by hand.", "class Authingnyist < Formula", '  desc "NYIST network authentication CLIs"', '  homepage "https://github.com/GUYU2233/AuthingNYIST"', f'  version "{version}"', '  license "GPL-3.0-only"']
+    lines = ["# Generated from release binaries; do not edit hashes by hand.", "class Authingnyist < Formula", '  desc "NYIST network connector"', '  homepage "https://github.com/GUYU2233/AuthingNYIST"', f'  version "{version}"', '  license "GPL-3.0-only"']
     for os, brew_os in (("macos", "macos"), ("linux", "linux")):
         lines.append(f"  on_{brew_os} do")
         for arch, condition in (("arm64", "Hardware::CPU.arm?"), ("amd64", "Hardware::CPU.intel?")):
-            nyist, classic = data[os, arch]
-            lines += [f"    if {condition} && Hardware::CPU.is_64_bit?", f'      url "{BASE}/{tag}/{nyist["name"]}", using: :nounzip', f'      sha256 "{nyist["sha256"]}"', '      resource "auth-nyist" do', f'        url "{BASE}/{tag}/{classic["name"]}", using: :nounzip', f'        sha256 "{classic["sha256"]}"', '      end', '    end']
+            nyist, = data[os, arch]
+            lines += [f"    if {condition} && Hardware::CPU.is_64_bit?", f'      url "{BASE}/{tag}/{nyist["name"]}", using: :nounzip', f'      sha256 "{nyist["sha256"]}"', '    end']
         lines.append("  end")
-    lines += ['  def install', '    binary = Dir["nyist-connect-*"].first', '    bin.install binary => "nyist-connect"', '    resource("auth-nyist").stage do', '      bin.install Dir["auth-nyist.*"].first => "auth-nyist"', '    end', '  end', '  test do', '    assert_match version.to_s, shell_output("#{bin}/nyist-connect --version")', '    assert_match version.to_s, shell_output("#{bin}/auth-nyist --version")', '  end', 'end', '']
+    lines += ['  def install', '    binary = Dir["nyist-connect-*"].first', '    bin.install binary => "nyist-connect"', '  end', '  test do', '    assert_match version.to_s, shell_output("#{bin}/nyist-connect --version")', '  end', 'end', '']
     return "\n".join(lines)
 
 
 def ports(version, tag, data):
-    lines = ['# Generated binary-only port; installation never starts services.', 'PortSystem 1.0', '', 'name authingnyist', f'version {version}', 'categories net', 'maintainers nomaintainer', 'license GPL-3', 'description NYIST network authentication CLIs', 'long_description ${description}', 'homepage https://github.com/GUYU2233/AuthingNYIST', 'platforms darwin', 'supported_archs x86_64 arm64', 'universal_variant no', f'master_sites {BASE}/{tag}/', 'use_configure no', 'worksrcdir .', 'build {}', 'extract {}', '']
+    lines = ['# Generated binary-only port; installation never starts services.', 'PortSystem 1.0', '', 'name authingnyist', f'version {version}', 'categories net', 'maintainers nomaintainer', 'license GPL-3', 'description NYIST network connector', 'long_description ${description}', 'homepage https://github.com/GUYU2233/AuthingNYIST', 'platforms darwin', 'supported_archs x86_64 arm64', 'universal_variant no', f'master_sites {BASE}/{tag}/', 'use_configure no', 'worksrcdir .', 'build {}', 'extract {}', '']
     for arch, port_arch in (("amd64", "x86_64"), ("arm64", "arm64")):
-        nyist, classic = data["macos", arch]
-        lines += [f'if {{${{build_arch}} eq "{port_arch}"}} {{', f'    set nyist_binary {nyist["name"]}', f'    set classic_binary {classic["name"]}', '    distfiles ${nyist_binary} ${classic_binary}', f'    checksums ${{nyist_binary}} sha256 {nyist["sha256"]} size {nyist["size"]} \\', f'              ${{classic_binary}} sha256 {classic["sha256"]} size {classic["size"]}', '}']
-    lines += ['destroot {', '    xinstall -d ${destroot}${prefix}/bin', '    xinstall -m 0755 ${distpath}/${nyist_binary} ${destroot}${prefix}/bin/nyist-connect', '    xinstall -m 0755 ${distpath}/${classic_binary} ${destroot}${prefix}/bin/auth-nyist', '}', '']
+        nyist, = data["macos", arch]
+        lines += [f'if {{${{build_arch}} eq "{port_arch}"}} {{', f'    set nyist_binary {nyist["name"]}', '    distfiles ${nyist_binary}', f'    checksums ${{nyist_binary}} sha256 {nyist["sha256"]} size {nyist["size"]}', '}']
+    lines += ['destroot {', '    xinstall -d ${destroot}${prefix}/bin', '    xinstall -m 0755 ${distpath}/${nyist_binary} ${destroot}${prefix}/bin/nyist-connect', '}', '']
     return "\n".join(lines)
 
 
@@ -59,10 +59,10 @@ def nix(version, tag, data):
     for os, nix_os in (("linux", "linux"), ("macos", "darwin")):
         for arch, nix_arch in (("amd64", "x86_64"), ("arm64", "aarch64")):
             lines += [f'    "{nix_arch}-{nix_os}" = {{']
-            for key, asset in zip(("nyist", "classic"), data[os, arch]):
+            for key, asset in zip(("nyist",), data[os, arch]):
                 lines += [f'      {key} = pkgs.fetchurl {{', f'        url = "{BASE}/{tag}/{asset["name"]}";', f'        sha256 = "{asset["sha256"]}";', '      };']
             lines.append('    };')
-    lines += ['  };', '  binaries = releases.${pkgs.stdenv.hostPlatform.system} or (throw "AuthingNYIST supports only x86_64/aarch64 Linux and Darwin");', 'in pkgs.stdenvNoCC.mkDerivation {', '  pname = "authingnyist";', f'  version = "{version}";', '  dontUnpack = true;', '  dontBuild = true;', '  dontStrip = true;', '  dontPatchELF = true;', '  dontPatchShebangs = true;', '  installPhase = \'\'', '    mkdir -p "$out/bin"', '    install -m755 ${binaries.nyist} "$out/bin/nyist-connect"', '    install -m755 ${binaries.classic} "$out/bin/auth-nyist"', '  \'\';', '  doInstallCheck = true;', '  installCheckPhase = \'\'', '    "$out/bin/nyist-connect" --version', '    "$out/bin/auth-nyist" --version', '  \'\';', '  meta = {', '    description = "NYIST network authentication CLIs";', '    homepage = "https://github.com/GUYU2233/AuthingNYIST";', '    license = pkgs.lib.licenses.gpl3Only;', '    platforms = builtins.attrNames releases;', '    mainProgram = "nyist-connect";', '  };', '}', '']
+    lines += ['  };', '  binaries = releases.${pkgs.stdenv.hostPlatform.system} or (throw "AuthingNYIST supports only x86_64/aarch64 Linux and Darwin");', 'in pkgs.stdenvNoCC.mkDerivation {', '  pname = "authingnyist";', f'  version = "{version}";', '  dontUnpack = true;', '  dontBuild = true;', '  dontStrip = true;', '  dontPatchELF = true;', '  dontPatchShebangs = true;', '  installPhase = \'\'', '    mkdir -p "$out/bin"', '    install -m755 ${binaries.nyist} "$out/bin/nyist-connect"', '  \'\';', '  doInstallCheck = true;', '  installCheckPhase = \'\'', '    "$out/bin/nyist-connect" --version', '  \'\';', '  meta = {', '    description = "NYIST network connector";', '    homepage = "https://github.com/GUYU2233/AuthingNYIST";', '    license = pkgs.lib.licenses.gpl3Only;', '    platforms = builtins.attrNames releases;', '    mainProgram = "nyist-connect";', '  };', '}', '']
     return "\n".join(lines)
 
 

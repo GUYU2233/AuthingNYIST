@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 import Darwin
 
 // The CLI is the sole config writer and networking implementation. Neither argv nor logs carry secrets.
@@ -15,6 +16,17 @@ final class ConnectionModel: ObservableObject {
     @Published var loaded = false
     @Published var keepingAlive = false
     @Published var message = "正在读取配置…"
+    @Published var online: Bool? = nil
+    @Published var updateResult: String? = nil
+    static let releaseURL = URL(string: "https://github.com/Palvef/AuthingNYIST/releases")!
+
+    var statusText: String {
+        if busy { return "处理中" }
+        if !loaded { return "配置不可用" }
+        if keepingAlive { return online == false ? "保活中 · 离线" : "保活中" }
+        guard let online = online else { return "状态未知" }
+        return online ? "在线" : "离线"
+    }
     private let worker = DispatchQueue(label: "AuthingNYIST.core")
     private var document: [String: Any] = [:] // Preserve settings not exposed by this GUI.
     private var daemon: Process? // Access only on worker.
@@ -69,7 +81,7 @@ final class ConnectionModel: ObservableObject {
                 let data = try self.invoke("--config-json")
                 guard let config = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let network = config["network"] as? String,
-                      ["nyist-tec", "nyist-stu"].contains(network),
+                      ["auto", "nyist-tec", "nyist-stu"].contains(network),
                       let username = config["username"] as? String,
                       let password = config["password"] as? String else { throw CoreFailure.failed }
                 DispatchQueue.main.async {
@@ -78,8 +90,9 @@ final class ConnectionModel: ObservableObject {
                     self.background = config["background"] as? Bool ?? true
                     self.startMinimized = config["startMinimized"] as? Bool ?? false
                     self.loaded = true; self.busy = false
-                    self.message = "配置已读取；尚未查询网络状态。"
+                    self.message = "配置已读取。"
                     completion()
+                    self.perform("status")
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -113,6 +126,7 @@ final class ConnectionModel: ObservableObject {
                 owner.daemon = nil
                 DispatchQueue.main.async {
                     owner.keepingAlive = false
+                    owner.online = nil
                     if !owner.quitting { owner.message = "保活进程已停止。请查询状态；需要时重新连接。" }
                 }
             }
@@ -133,17 +147,19 @@ final class ConnectionModel: ObservableObject {
         }
     }
 
-    // One operation at a time. No independent GUI keepalive timer and no status/logout racing the daemon.
+    // Mutating operations remain serialized; the core permits read-only status outside its daemon lock.
     func perform(_ action: String) {
-        guard loaded, !busy, !quitting else { return }
-        guard !keepingAlive || action == "stop" || action == "disconnect" else { return }
+        guard !busy, !quitting, loaded || action == "update" else { return }
+        guard !keepingAlive || ["stop", "disconnect", "status", "update"].contains(action) else { return }
         let input: Data
         do { input = try snapshot() } catch { message = "无法处理配置。"; return }
         busy = true
         message = "正在处理…"
         worker.async {
             var result = "操作已完成。"
-            var alive = false
+            var alive = self.daemon != nil
+            var inspectedOnline: Bool? = nil
+            var updateText: String? = nil
             do {
                 switch action {
                 case "save":
@@ -154,28 +170,43 @@ final class ConnectionModel: ObservableObject {
                     _ = try self.invoke("--connect")
                     try self.startDaemon()
                     alive = true
-                    result = "连接成功；核心保活运行中。"
+                    inspectedOnline = true
+                    result = "连接成功，保活运行中。"
                 case "disconnect":
                     self.stopDaemon()
+                    alive = false
                     _ = try self.invoke("--disconnect")
+                    inspectedOnline = false
                     result = "已请求注销校园网；保活已停止。"
                 case "stop":
                     self.stopDaemon()
-                    result = "保活已停止，未主动注销校园网。"
+                    alive = false
+                    result = "保活已停止，校园网连接保留。"
                 case "status":
                     let data = try self.invoke("--status-json")
                     guard let status = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                           let online = status["Online"] as? Bool else { throw CoreFailure.failed }
                     // Do not surface untrusted server messages or credentials.
-                    result = online ? "校园网在线。" : "校园网未在线。"
+                    inspectedOnline = online
+                    result = online ? "已保存账号：校园网在线。" : "已保存账号：校园网离线。"
+                case "update":
+                    let data = try self.invoke("--check-update")
+                    guard let text = String(data: data, encoding: .utf8), !text.isEmpty else { throw CoreFailure.failed }
+                    // Display plain text only; release navigation always uses our fixed URL.
+                    updateText = String(text.prefix(4096))
+                    result = "更新检查完成。"
                 default: throw CoreFailure.failed
                 }
             } catch {
                 result = "操作失败。请检查配置、校园网络和核心程序后重试。"
                 alive = self.daemon != nil
+                if action == "update" { updateText = "检查更新失败，请检查网络后重试。" }
             }
             DispatchQueue.main.async {
                 self.keepingAlive = alive; self.busy = false; self.message = result
+                if let online = inspectedOnline { self.online = online }
+                else if ["status", "connect", "disconnect"].contains(action) { self.online = nil }
+                if let text = updateText { self.updateResult = text }
             }
         }
     }
@@ -198,25 +229,39 @@ struct ContentView: View {
             Text("南阳理工学院 · 校园网连接").foregroundColor(.secondary)
             Group {
                 Picker("网络", selection: $model.network) {
+                    Text("自动识别").tag("auto")
                     Text("nyist-tec").tag("nyist-tec")
                     Text("nyist-stu").tag("nyist-stu")
                 }.pickerStyle(SegmentedPickerStyle())
                 TextField("用户名", text: $model.username)
                 SecureField("密码", text: $model.password)
                 Toggle("关闭窗口后留在菜单栏", isOn: $model.background)
-                Toggle("下次打开应用时收起窗口（不是开机自启动）", isOn: $model.startMinimized)
+                Toggle("启动时收起窗口", isOn: $model.startMinimized)
             }.disabled(model.busy || !model.loaded || model.keepingAlive)
             HStack {
                 Button("保存") { model.perform("save") }.disabled(model.keepingAlive)
                 Button("连接并保活") { model.perform("connect") }.disabled(model.keepingAlive)
-                Button("查询状态") { model.perform("status") }.disabled(model.keepingAlive)
+                Button("查询状态") { model.perform("status") }
                 Button("断开…") { confirmDisconnect = true }
             }.disabled(model.busy || !model.loaded)
-            Button("停止保活（不注销）") { model.perform("stop") }
+            Button("停止保活") { model.perform("stop") }
                 .disabled(model.busy || !model.keepingAlive)
             Text(model.message).fixedSize(horizontal: false, vertical: true).frame(minHeight: 40, alignment: .topLeading)
             Divider()
-            Text("密码以明文保存在 Application Support/AuthingNYIST/config.json，文件权限 0600；未使用 Keychain。请保护本机账号。退出应用会停止保活，但不会注销校园网。保活运行时请先停止，再修改配置或查询状态。")
+            HStack {
+                Button("检查更新") { model.perform("update") }.disabled(model.busy)
+                Button("发行页面") { NSWorkspace.shared.open(ConnectionModel.releaseURL) }
+                Button("管理登录项…") {
+                    let target: String
+                    if #available(macOS 13.0, *) {
+                        target = "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+                    } else {
+                        target = "x-apple.systempreferences:com.apple.preferences.users"
+                    }
+                    if let url = URL(string: target) { NSWorkspace.shared.open(url) }
+                }
+            }
+            Text("登录启动请在系统登录项中手动管理。密码以本地明文保存（权限 0600），请保护本机账号。退出会停止保活，保留校园网连接。修改配置前请先停止保活。")
                 .font(.footnote).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(24).frame(width: 520)
@@ -233,6 +278,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var item: NSStatusItem!
     private var lockFD: Int32 = -1
     private var terminating = false
+    private var subscriptions = Set<AnyCancellable>()
+    private var actionItems: [String: NSMenuItem] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A second GUI must not create another keepalive against the same configuration.
@@ -250,13 +297,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentView = NSHostingView(rootView: ContentView(model: model))
         window.center()
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let image = NSImage(systemSymbolName: "network", accessibilityDescription: "NYIST Connect") { item.button?.image = image }
-        else { item.button?.title = "NYIST" }
         let menu = NSMenu()
-        menu.addItem(withTitle: "打开 NYIST Connect", action: #selector(showWindow), keyEquivalent: "o").target = self
+        menu.autoenablesItems = false
+        func add(_ title: String, _ selector: Selector, _ key: String = "", id: String? = nil) {
+            let entry = menu.addItem(withTitle: title, action: selector, keyEquivalent: key)
+            entry.target = self
+            if let id = id { actionItems[id] = entry }
+        }
+        add("设置…", #selector(showWindow), "o")
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(withTitle: "退出（停止保活，不注销）", action: #selector(quit), keyEquivalent: "q").target = self
+        add("连接并保活", #selector(connect), id: "connect")
+        add("查询状态", #selector(status), id: "status")
+        add("断开校园网…", #selector(disconnect), id: "disconnect")
+        add("停止保活", #selector(stop), id: "stop")
+        menu.addItem(NSMenuItem.separator())
+        add("检查更新…", #selector(checkUpdate), id: "update")
+        add("打开发行页面", #selector(openRelease))
+        menu.addItem(NSMenuItem.separator())
+        add("退出 NYIST Connect", #selector(quit), "q")
         item.menu = menu
+        // Published values are delivered before assignment; render on the next main-queue turn.
+        model.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.refreshMenu()
+        }.store(in: &subscriptions)
+        model.$updateResult.compactMap { $0 }.receive(on: DispatchQueue.main).sink { [weak self] text in
+            guard self != nil else { return }
+            let alert = NSAlert()
+            alert.messageText = "检查更新"
+            alert.informativeText = text
+            alert.addButton(withTitle: "好")
+            alert.addButton(withTitle: "发行页面")
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.open(ConnectionModel.releaseURL) }
+        }.store(in: &subscriptions)
+        refreshMenu()
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem(); mainMenu.addItem(applicationItem)
         let applicationMenu = NSMenu(); applicationItem.submenu = applicationMenu
@@ -274,6 +348,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 NSApp.setActivationPolicy(.accessory)
             } else { self.showWindow() }
         }
+    }
+    private func refreshMenu() {
+        item.button?.title = " NYIST · " + model.statusText
+        let symbol = model.busy ? "ellipsis.circle" : (model.keepingAlive ? "arrow.triangle.2.circlepath" : (model.online == true ? "checkmark.circle" : "network"))
+        item.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: model.statusText)
+        item.button?.imagePosition = .imageLeading
+        item.button?.toolTip = model.message
+        let ready = model.loaded && !model.busy && !terminating
+        actionItems["connect"]?.isEnabled = ready && !model.keepingAlive
+        actionItems["status"]?.isEnabled = ready
+        actionItems["disconnect"]?.isEnabled = ready
+        actionItems["stop"]?.isEnabled = ready && model.keepingAlive
+        actionItems["update"]?.isEnabled = !model.busy && !terminating
+    }
+    @objc private func connect() { model.perform("connect") }
+    @objc private func status() { model.perform("status") }
+    @objc private func stop() { model.perform("stop") }
+    @objc private func checkUpdate() { model.perform("update") }
+    @objc private func openRelease() { NSWorkspace.shared.open(ConnectionModel.releaseURL) }
+    @objc private func disconnect() {
+        let alert = NSAlert()
+        alert.messageText = "确认断开校园网？"
+        alert.informativeText = "将停止保活并注销校园网，网络连接可能中断。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "断开")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertSecondButtonReturn { model.perform("disconnect") }
     }
     @objc private func showWindow() {
         NSApp.setActivationPolicy(.regular)

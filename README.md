@@ -21,7 +21,7 @@
 | 自启动 | 当前用户登录启动 / 经 UAC 授权的开机认证服务 | systemd user / 显式 system 服务 | 暂不支持 |
 | 后台与退出 | 最小化到托盘、关闭留后台、右键打开/退出 | 后台 PID、systemd 服务管理 | 菜单栏后台；退出停止保活、不注销 |
 
-原有 `auth-nyist` 命令行程序及一键脚本保留；新增应用入口为 `cmd/nyist`，两者配置独立。
+统一使用 `nyist-connect`，应用入口为 `cmd/nyist`。经典 `auth-nyist` 及其一键脚本已移除；旧版配置不会自动迁移，请在账号设置中重新填写。
 
 ## 下载
 
@@ -32,7 +32,6 @@
 | `nyist-connect.exe` | Windows x64 原生 GUI |
 | `nyist-connect-linux-amd64` | Linux x64 终端版 |
 | `nyist-connect-linux-arm64` | Linux ARM64 终端版 |
-| `auth-nyist.*` | 保留的经典 CLI，多架构构建 |
 
 ### 包管理器安装
 
@@ -79,7 +78,7 @@ chmod +x ./nyist-connect-linux-amd64
 ./nyist-connect-linux-amd64
 ```
 
-菜单支持选择网络、隐藏密码输入、保存、认证、状态检查、确认注销、后台启动和 systemd 服务管理。ARM64 使用对应文件名。
+Linux 交互界面使用开源 **Charmbracelet Huh（基于 Bubble Tea）**，提供方向键选择、可搜索操作列表、带校验的账号表单及隐藏密码输入；支持保存、认证、只读状态检查、默认取消的登出确认、后台启动和 systemd 服务管理。Ctrl+C 取消并退出，不主动登出或停止保活；每次操作使用独立且有超时的上下文，避免一次中断导致后续操作全部失败。非终端输入不启动交互界面，请使用下述动作参数。ARM64 使用对应文件名。
 
 ```sh
 ./nyist-connect-linux-amd64 --connect
@@ -112,7 +111,6 @@ chmod +x ./nyist-connect-linux-amd64
 
 - 状态检查不需要密码，报告当前网络、在线账号和 IP；门户不可达或响应无效不是“确认离线”。连接及注销仍拒绝操作其他账号的会话。
 - Linux 菜单与 macOS CLI 菜单增加“检查更新”，菜单配置支持自动网络模式。macOS 使用对应终端二进制和相同参数。
-- 经典 CLI 支持默认认证、`auth`、`deauth`、`status`（别名 `online`）、`check-update`，并提供 `--network`、`--host`、`--ac-id`；运行 `auth-nyist --help` 查看参数。两套 CLI 配置仍独立。
 - 认证、门户状态与经典保活 HTTP 请求明确禁用环境代理（HTTP_PROXY / HTTPS_PROXY 等），不改变系统代理设置。新连接尽量选择非虚拟的物理网卡和源地址；Linux 进一步尝试设备绑定，无权限时退回源地址绑定。**这不是对所有 TUN 的保证**：策略路由、透明拦截、虚假 DNS 及操作系统权限仍可能影响请求。其他系统目前仅源地址绑定。遇到此类情况，需要在代理软件中将校园域名及真实认证服务器 IP 配置为直连；程序不会自动关闭 TUN、提权或修改全局路由。
 - 更新检测访问 `GUYU2233/AuthingNYIST` 的 GitHub 最新稳定 Release，允许沿用环境代理以便访问 GitHub；具有超时、响应大小限制及 API 错误处理。仅提示版本及发布页面，**不自动下载、安装、执行附件**。离线或 API 限流会返回错误，不伪报“已是最新”。
 - 源码构建默认版本为 `dev`，仍显示最新 Release，但不会假定开发版落后。发布脚本从 `VERSION`、`GITHUB_REF_NAME` 或 `CI_COMMIT_TAG` 注入版本；手动构建可以使用：
@@ -131,9 +129,8 @@ go build -ldflags '-X github.com/Palvef/AuthingNYIST/internal/version.Version=v1
 
 ## 上游问题同步
 
-- [上游 #4：TUN 下保活误判在线](https://github.com/Palvef/AuthingNYIST/issues/4)：经典 CLI 改为验证图书馆 HTTP 应用层响应，而非只检查 TCP 握手；禁用环境代理和自动跳转，拒绝门户页面、错误响应及超时。保活重认证不再递归创建循环，已在线启动也能进入保活。
+- [上游 #4：TUN 下保活误判在线](https://github.com/Palvef/AuthingNYIST/issues/4)：采纳应用层验证思路，不能仅凭 TCP 握手判断在线。当前统一客户端使用门户认证状态检查。
 - [上游安全依赖升级 PR #3](https://github.com/Palvef/AuthingNYIST/pull/3)：升级 `golang.org/x/crypto` 至 v0.45.0，并同步兼容的 `x/sys`、`x/term`；最低 Go 版本为 1.24。
-- 经典 CLI 的探测依赖图书馆当前 `302 → /opac/search/simsearch` 同源响应；若服务改版会保守判为不可达。应用层响应并非密码学身份验证，也不代表已绕过 TUN 路由。新增 GUI / Linux 应用使用门户认证状态检查，不依赖这个图书馆探测。
 
 ## 从源码构建
 
@@ -157,20 +154,11 @@ go vet ./...
 go build -trimpath -o nyist-connect ./cmd/nyist
 ```
 
-经典 CLI：
-
-```sh
-go build -o auth-nyist ./cli
-./auth-nyist --help
-```
-
-一键脚本参考 [oneclick 使用说明](oneclick/README.md)，务必自行创建真实配置，**不要提交账号密码**。
-
 ## CI 与发布
 
 - **GitHub Actions**：main 提交 / PR 自动运行 Windows / Linux 测试、`go vet`、格式和脚本语法检查，Linux 共享核心 race 测试，Windows 原生 GUI 冒烟测试；通过后统一交叉编译全部发行二进制。日常构建产物 `release-bundle` 保留 14 天。
 - **校内 GitLab CI**：分支 / MR / 标签自动运行 Linux 测试、校验和全部平台交叉编译；保留 SAST 与 Secret Detection。Windows GUI 交叉编译不需要 Windows Runner，但真实 GUI 冒烟测试由 GitHub Windows Runner 执行。
-- **自动发行**：两端均在推送 `v*` 标签后发布 Windows GUI、Linux amd64 / arm64、经典 CLI 多架构、说明文档、许可证与 `SHA256SUMS.txt`。GitHub 使用内置 `GITHUB_TOKEN`；GitLab 使用内置 `CI_JOB_TOKEN` 将文件存入 Generic Package Registry，再创建永久下载链接的 Release，无需个人访问令牌。失败可重跑同一标签流水线；请勿移动或复用已公开版本标签。
+- **自动发行**：两端均在推送 `v*` 标签后发布 Windows GUI、Linux amd64 / arm64、macOS amd64 / arm64 终端版、说明文档、许可证与 `SHA256SUMS.txt`。GitHub 使用内置 `GITHUB_TOKEN`；GitLab 使用内置 `CI_JOB_TOKEN` 将文件存入 Generic Package Registry，再创建永久下载链接的 Release，无需个人访问令牌。失败可重跑同一标签流水线；请勿移动或复用已公开版本标签。
 - 详细触发命令、Runner / 权限要求、校验和及失败排查见 [CI/CD 与发行指南](docs/CI-CD.md)。
 - 本地已验证 Windows GUI 与单元测试；Linux 运行时由 CI 的 Ubuntu 测试覆盖，**真实校园网络、桌面环境与 systemd 服务仍需在目标机器验证**。测试使用 mock / fake runner，不执行真实认证或服务变更。
 

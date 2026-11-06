@@ -36,9 +36,9 @@ jobs:
       - name: Check formatting and shell syntax
         shell: bash
         run: |
-          files=$(gofmt -l cmd internal cli libauth/requests.go)
+          files=$(gofmt -l cmd internal libauth/requests.go)
           if [ -n "$files" ]; then printf '%s\n' "$files"; exit 1; fi
-          for script in scripts/*.sh oneclick/*.sh; do bash -n "$script"; done
+          for script in scripts/*.sh; do bash -n "$script"; done
       - name: Test package recipe generation
         if: runner.os == 'Linux'
         run: |
@@ -133,7 +133,6 @@ jobs:
           path: |
             dist/nyist-connect*
             dist/NYIST-Connect-macos-*.dmg
-            dist/auth-nyist.*
             dist/README.md
             dist/NYIST-CONNECT.md
             dist/PACKAGING.md

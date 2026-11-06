@@ -12,11 +12,11 @@
 | AUR | 固定版本与校验和的 PKGBUILD / .SRCINFO 配方归档；需维护者单独提交 AUR | 同上；AUR 官方主要面向 x86_64 |
 | Flatpak | 固定版本 manifest；本地构建 bundle（见生成的说明） | Linux x86_64、aarch64 |
 | Snap | 固定版本 snapcraft 配方；本地构建 snap（见生成的说明） | Linux amd64、arm64 |
-| Homebrew | 固定版本 Formula，安装两个 CLI | Linux / macOS Intel、ARM64 |
+| Homebrew | 固定版本 Formula，安装 nyist-connect | Linux / macOS Intel、ARM64 |
 | MacPorts | 本地 Portfile | macOS x86_64、arm64 |
 | Nix | 固定哈希 binary derivation | Linux / macOS x86_64、aarch64 |
 
-这些包安装 `nyist-connect` 和经典 `auth-nyist`，**不自动登录、不写账号、不自动启用服务**。macOS GUI / DMG 与 Windows GUI 仍由原有流程发布；本页的包管理器配方面向 CLI。其他 CPU 的经典单文件仍保留，不代表已提供对应系统包。
+这些包安装 `nyist-connect`，**不自动登录、不写账号、不自动启用服务**。macOS GUI / DMG 与 Windows GUI 仍由原有流程发布；本页的包管理器配方面向 CLI。经典 CLI 已移除。
 
 ## 下载与本地安装
 
@@ -37,7 +37,7 @@ sudo zypper install ./nyist-connect-VERSION-1.x86_64.rpm
 sudo pacman -U ./nyist-connect-VERSION-1-x86_64.pkg.tar.zst
 ```
 
-现代 CLI 的 Wi-Fi 检测/切换需要宿主提供 NetworkManager 的 CLI（原生包不强制替换或安装网络管理器）；不同桌面或非 NetworkManager 系统请先确认兼容性。不要为安装而停用已有网络管理服务。经典 CLI 可独立使用 portal 功能。配置按原程序保存于用户目录，不随卸载自动删除，避免丢失账号配置。
+现代 CLI 的 Wi-Fi 检测/切换需要宿主提供 NetworkManager 的 CLI（原生包不强制替换或安装网络管理器）；不同桌面或非 NetworkManager 系统请先确认兼容性。不要为安装而停用已有网络管理服务。配置按原程序保存于用户目录，不随卸载自动删除，避免丢失账号配置。
 
 ## Homebrew、MacPorts、Nix
 

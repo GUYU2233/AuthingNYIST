@@ -24,8 +24,8 @@ class RecipeTests(unittest.TestCase):
         self.output = self.root / "recipes"
         self.names = []
         for os in ("linux", "macos"):
-            for arch, classic in (("amd64", "x86_64"), ("arm64", "arm64")):
-                for name in (f"nyist-connect-{os}-{arch}", f"auth-nyist.{os}.{classic}"):
+            for arch in ("amd64", "arm64"):
+                for name in (f"nyist-connect-{os}-{arch}",):
                     (self.dist / name).write_bytes(b"fixture binary\x00" + name.encode())
                     self.names.append(name)
 
@@ -38,7 +38,7 @@ class RecipeTests(unittest.TestCase):
         result = self.run_generator()
         self.assertEqual(result.returncode, 0, result.stderr)
         manifest = json.loads((self.output / "manifest.json").read_text())
-        self.assertEqual(len(manifest["assets"]), 8)
+        self.assertEqual(len(manifest["assets"]), 4)
         brew = (self.output / "homebrew/authingnyist.rb").read_text()
         ports = (self.output / "macports/Portfile").read_text()
         nix = (self.output / "nix/default.nix").read_text()
@@ -57,12 +57,12 @@ class RecipeTests(unittest.TestCase):
         self.assertIn("platforms darwin", ports)
         self.assertIn("supported_archs x86_64 arm64", ports)
         self.assertIn("extract {}", ports)
-        self.assertEqual(brew.count("using: :nounzip"), 8)
+        self.assertEqual(brew.count("using: :nounzip"), 4)
         self.assertIn("on_macos do", brew)
         self.assertIn("on_linux do", brew)
         self.assertIn("Hardware::CPU.is_64_bit?", brew)
         self.assertIn("nyist-connect --version", brew)
-        self.assertIn("auth-nyist --version", brew)
+        self.assertNotIn("auth-nyist", brew + ports + nix)
         for recipe in (brew, ports, nix):
             self.assertIn("https://github.com/GUYU2233/AuthingNYIST", recipe)
             self.assertNotIn("Palvef", recipe)

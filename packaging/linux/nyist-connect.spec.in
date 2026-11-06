@@ -22,7 +22,6 @@ cp -a "%{_sourcedir}/payload/." "%{buildroot}/"
 
 %files
 /usr/bin/nyist-connect
-/usr/bin/auth-nyist
 %license /usr/share/licenses/nyist-connect/LICENSE
 %doc /usr/share/doc/nyist-connect/README.md
 %doc /usr/share/doc/nyist-connect/NYIST-CONNECT.md

@@ -2,12 +2,12 @@
 <component type="console-application">
   <id>io.github.GUYU2233.AuthingNYIST</id>
   <name>NYIST Connect CLI</name>
-  <summary>Terminal clients for NYIST campus portal authentication</summary>
+  <summary>Terminal client for NYIST campus portal authentication</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
   <url type="homepage">https://github.com/GUYU2233/AuthingNYIST</url>
   <description>
-    <p>Terminal-only nyist-connect and classic auth-nyist clients. Requires an existing campus network connection. Host Wi-Fi selection and host service management are not supported in Flatpak.</p>
+    <p>Terminal-only nyist-connect client. Requires an existing campus network connection. Host Wi-Fi selection and host service management are not supported in Flatpak.</p>
   </description>
-  <provides><binary>nyist-connect</binary><binary>auth-nyist</binary></provides>
+  <provides><binary>nyist-connect</binary></provides>
 </component>

@@ -2,7 +2,7 @@
 
 Generate both `dist/sandbox/snap-amd64/snap/snapcraft.yaml` and the arm64
 counterpart using `VERSION=v1.2.3 bash scripts/package-sandbox.sh` after creating
-release binaries. Both CLI commands are shipped; no daemon, install hook,
+release binaries. Only nyist-connect is shipped; no daemon, install hook,
 auto-start, interface auto-connect or automatic service installation is defined.
 URLs and SHA-256 are pinned to that release and computed from local dist assets.
 The source-checksum field verifies the downloaded binary before staging it.
@@ -28,14 +28,13 @@ bash scripts/package-sandbox.sh v1.2.3 dist dist/sandbox snap
 # Equivalent: cd dist/sandbox/snap-amd64 && snapcraft --output ../nyist-connect-1.2.3-amd64.snap
 sudo snap install --dangerous --classic dist/sandbox/nyist-connect-1.2.3-amd64.snap
 nyist-connect --version
-nyist-connect.auth-nyist --help
 ```
 
 Local unasserted installation requires the shown `--dangerous` acknowledgement;
 installation is not performed by our script. User-requested host service commands
 are not Snap-managed services; no service is enabled by packaging. Classic Snap
-is not a TUN/VPN or hardware-binding bypass. Join campus networking first; classic
-portal-only status/auth can use explicit `--network nyist-stu` or `nyist-tec`.
+is not a TUN/VPN or hardware-binding bypass. Join campus networking first; use nyist-connect with explicit
+`--network nyist-stu` or `nyist-tec` where appropriate.
 `bash scripts/package-sandbox.sh test` validates generation without Snapcraft.
 The nil-plugin/file-source recipe uses common Snapcraft source properties;
 Snapcraft/schema validation and actual core24 provider builds were not available

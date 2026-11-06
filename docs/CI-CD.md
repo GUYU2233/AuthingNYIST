@@ -7,7 +7,7 @@
 | GitHub | main / PR：Windows + Linux 测试、vet、格式、脚本语法、Linux race、Windows GUI 冒烟；全部架构构建 | 复用全部测试与构建，生成 Release |
 | 校内 GitLab | 分支 / MR：Linux 测试、vet、格式 / 语法检查，SAST / Secret Detection，全部架构构建 | 测试和构建后上传 Generic Package Registry 并发布 Release |
 
-构建产物：Windows x64 GUI、Linux amd64 / arm64 交互版，以及经典 CLI 的 macOS amd64 / arm64、Windows x64、Linux x64 / arm64 / arm / armv5 / armv6 / mipsle / mipsbe / ppc64le / riscv64 / loong64。Windows GUI 在 Linux 交叉编译时也嵌入图标和 manifest。
+构建产物：Windows x64 GUI、Linux amd64 / arm64 交互版、macOS amd64 / arm64 终端版及原生 DMG。Windows GUI 在 Linux 交叉编译时也嵌入图标和 manifest。
 
 发布脚本使用明确白名单，不上传账号配置、测试程序或工作目录其他文件。发行文件包含 README、使用说明、GPL 许可证及 `SHA256SUMS.txt`。Linux 下载后执行 `chmod +x`。普通流水线产物仅用于短期下载；GitLab Release 的下载链接使用 Package Registry，不依赖会过期的构建 artifact。不要删除发行版对应的包或设置会清理它们的包保留规则。
 

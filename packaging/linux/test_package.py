@@ -25,7 +25,7 @@ class PackagingTests(unittest.TestCase):
             tmp = Path(tmp)
             inputs, outputs = tmp / 'inputs', tmp / 'outputs'
             inputs.mkdir()
-            for name in ('nyist-connect-linux-amd64', 'nyist-connect-linux-arm64', 'auth-nyist.linux.x86_64', 'auth-nyist.linux.arm64'):
+            for name in ('nyist-connect-linux-amd64', 'nyist-connect-linux-arm64'):
                 (inputs / name).write_bytes(b'fixture-only-not-executable\n')
             formats = ['aur']
             for tool, fmt in [('dpkg-deb', 'deb'), ('rpmbuild', 'rpm'), ('zstd', 'arch')]:
@@ -37,6 +37,8 @@ class PackagingTests(unittest.TestCase):
             subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
             recipe = (outputs / 'PKGBUILD').read_text()
             self.assertNotIn('SKIP', recipe)
+            self.assertNotIn('auth-nyist', recipe)
+            self.assertNotIn('auth-nyist', (outputs / '.SRCINFO').read_text())
             self.assertIn(hashlib.sha256(b'fixture-only-not-executable\n').hexdigest(), recipe)
             self.assertIn('https://github.com/GUYU2233/AuthingNYIST/releases/download/v1.2.3-rc.1+test/', recipe)
             subprocess.run(['bash', '-n', str(outputs / 'PKGBUILD')], check=True)
@@ -49,7 +51,7 @@ class PackagingTests(unittest.TestCase):
                     with tarfile.open(fileobj=io.BytesIO(control)) as tar:
                         self.assertFalse(any(Path(n).name in ('postinst', 'preinst', 'prerm', 'postrm') for n in tar.getnames()))
                     listing = subprocess.check_output(['dpkg-deb', '-c', str(deb)]).decode()
-                    self.assertIn('./usr/bin/auth-nyist', listing)
+                    self.assertNotIn('./usr/bin/auth-nyist', listing)
                     self.assertIn('./usr/bin/nyist-connect', listing)
             if 'arch' in formats:
                 for package in outputs.glob('*.pkg.tar.zst'):
@@ -60,7 +62,8 @@ class PackagingTests(unittest.TestCase):
                         self.assertNotIn('.INSTALL', tar.getnames())
                         info = tar.extractfile('.PKGINFO').read().decode()
                         self.assertIn('pkgver = 1.2.3_rc.1+test-1', info)
-                        self.assertIn('usr/bin/auth-nyist', tar.getnames())
+                        self.assertNotIn('usr/bin/auth-nyist', tar.getnames())
+                        self.assertIn('usr/bin/nyist-connect', tar.getnames())
             if 'rpm' in formats:
                 rpms = list(outputs.glob('*.rpm'))
                 self.assertEqual(len(rpms), 2)

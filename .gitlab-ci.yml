@@ -66,9 +66,9 @@ test_linux:
     - apt-get update && apt-get install --yes --no-install-recommends python3
     - PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/recipes -v
     - bash scripts/package-sandbox.sh test
-    - for script in scripts/*.sh oneclick/*.sh; do bash -n "$script"; done
+    - for script in scripts/*.sh; do bash -n "$script"; done
     - |
-      files=$(gofmt -l cmd internal cli libauth/requests.go)
+      files=$(gofmt -l cmd internal libauth/requests.go)
       if [ -n "$files" ]; then printf '%s\n' "$files"; exit 1; fi
 
 # Opt in only after registering a trusted macOS shell runner tagged 'macos'.

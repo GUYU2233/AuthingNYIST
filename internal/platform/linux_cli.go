@@ -4,7 +4,6 @@
 package platform
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -114,7 +113,7 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	report := func(s app.Status) {
 		fmt.Fprintf(out, "网络: %s  在线: %t  账号: %s  IP: %s  %s\n", s.Network, s.Online, s.Username, s.IP, s.Message)
 	}
-	save := func(c app.Config) error {
+	save := func(ctx context.Context, c app.Config) error {
 		enabled, e := service.Enabled(ctx)
 		if e != nil {
 			if errors.Is(e, exec.ErrNotFound) {
@@ -131,7 +130,7 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 		cfg = c
 		return nil
 	}
-	setAuto := func(enable bool) error {
+	setAuto := func(ctx context.Context, enable bool) error {
 		return service.SetEnabled(ctx, enable, func(actual bool) error {
 			next := cfg
 			next.AutoStart = actual
@@ -157,7 +156,7 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 				return fmt.Errorf("请先在菜单配置账号: %w", err)
 			}
 		}
-		return setAuto(autostart == "enable")
+		return setAuto(ctx, autostart == "enable")
 	}
 	if status || statusJSON {
 		s, e := app.InspectStatus(ctx, cfg)
@@ -191,144 +190,14 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	if !term.IsTerminal(int(in.Fd())) {
 		return fmt.Errorf("交互菜单需要终端；脚本请使用 --connect/--status/--daemon 等参数")
 	}
-	reader := bufio.NewReader(in)
-	line := func(prompt string) (string, error) {
-		fmt.Fprint(out, prompt)
-		text, e := reader.ReadString('\n')
-		return strings.TrimSpace(text), e
-	}
-	fmt.Fprintf(out, "NYIST Linux 终端\n配置: %s\n密码保存在本地配置，请保护文件；终端输入不回显。\n", config)
-	for {
-		fmt.Fprintln(out, "\n1 配置账号（nyist-tec/nyist-stu）  2 认证  3 状态\n4 登出（将中断连接）  5 启动后台保活  6 添加自启动\n7 移除自启动  8 自启动状态  9 停止 systemd 保活  10 检查更新  0 退出")
-		choice, e := line("选择: ")
-		if e != nil {
-			if errors.Is(e, io.EOF) {
-				return nil
-			}
-			return e
-		}
-		switch choice {
-		case "0":
-			return nil
-		case "1":
-			next := cfg
-			n, e := line("网络 [0 自动检测 / 1 nyist-tec / 2 nyist-stu，默认自动]: ")
-			if e != nil {
-				return e
-			}
-			switch n {
-			case "", "0", "auto":
-				next.Network = "auto"
-			case "1", "nyist-tec":
-				next.Network = "nyist-tec"
-			case "2", "nyist-stu":
-				next.Network = "nyist-stu"
-			default:
-				fmt.Fprintln(out, "网络选择无效")
-				continue
-			}
-			next.Username, e = line("账号: ")
-			if e != nil {
-				return e
-			}
-			fmt.Fprint(out, "密码（隐藏）: ")
-			password, e := term.ReadPassword(int(in.Fd()))
-			fmt.Fprintln(out)
-			if e != nil {
-				return e
-			}
-			next.Password = string(password)
-			for i := range password {
-				password[i] = 0
-			}
-			if e = linuxCredentials(next); e == nil {
-				e = save(next)
-			}
-			if e != nil {
-				fmt.Fprintln(out, "配置未保存:", e)
-			} else {
-				fmt.Fprintln(out, "配置已保存。")
-			}
-		case "2":
-			s, e := app.Connect(ctx, cfg)
-			if e != nil {
-				fmt.Fprintln(out, e)
-			} else {
-				report(s)
-			}
-		case "3":
-			s, e := app.InspectStatus(ctx, cfg)
-			if e != nil {
-				fmt.Fprintln(out, e)
-			} else {
-				report(s)
-			}
-		case "4":
-			answer, e := line("警告：登出会中断校园网。请先停止保活进程，否则会重新认证。输入 LOGOUT 确认: ")
-			if e != nil {
-				return e
-			}
-			if answer == "LOGOUT" {
-				if e = app.Disconnect(ctx, cfg); e != nil {
-					fmt.Fprintln(out, e)
-				} else {
-					fmt.Fprintln(out, "已登出。")
-				}
-			} else {
-				fmt.Fprintln(out, "已取消登出。")
-			}
-		case "5":
-			if e = linuxCredentials(cfg); e == nil {
-				e = save(cfg)
-			}
-			if e == nil {
-				var pid int
-				pid, e = linuxStartBackground(exe, config)
-				if e == nil {
-					fmt.Fprintf(out, "后台 PID: %d；停止命令: kill -TERM %d\n", pid, pid)
-				}
-			}
-			if e != nil {
-				fmt.Fprintln(out, e)
-			} else {
-				fmt.Fprintln(out, "后台进程已启动（不等于自启动）；日志位于配置目录 nyist-daemon.log。停止请向该进程发送 SIGTERM；退出菜单不主动登出。")
-			}
-		case "6", "7":
-			linuxServiceNotice(out, system)
-			if choice == "6" {
-				if e = linuxCredentials(cfg); e != nil {
-					fmt.Fprintln(out, e)
-					continue
-				}
-			}
-			if e = setAuto(choice == "6"); e != nil {
-				fmt.Fprintln(out, e)
-			} else {
-				fmt.Fprintln(out, "自启动设置已更新；不会立即启动/停止进程。")
-			}
-		case "9":
-			if _, e = service.ctl(ctx, "stop", "nyist-auth.service"); e != nil {
-				fmt.Fprintln(out, e)
-			} else {
-				fmt.Fprintln(out, "systemd 保活已停止（未登出）；手动后台保活请按其启动提示的 PID 发送 SIGTERM。")
-			}
-		case "10":
-			if e = printUpdate(ctx, out); e != nil {
-				fmt.Fprintln(out, e)
-			}
-		case "8":
-			linuxServiceNotice(out, system)
-			enabled, e := service.Enabled(ctx)
-			if e != nil {
-				fmt.Fprintln(out, e)
-			} else {
-				fmt.Fprintf(out, "自启动已启用: %t\n", enabled)
-			}
-		default:
-			fmt.Fprintln(out, "无效选择。")
-		}
-	}
+	// Interactive input blocks independently of ctx. Do not swallow SIGINT and
+	// leave the menu alive with a permanently cancelled operation context.
+	// Restore the default signal action: Ctrl+C exits without logging out.
+	stop()
+	ctx = context.Background()
+	return runLinuxUI(in, out, config, exe, system, &cfg, service, save, setAuto, report)
 }
+
 func linuxCredentials(cfg app.Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
