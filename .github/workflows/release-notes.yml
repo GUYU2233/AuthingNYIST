@@ -1,0 +1,26 @@
+name: Update development release notes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - releases/v2.0.0-dev.md
+      - .github/workflows/release-notes.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update existing prerelease description only
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release view v2.0.0-dev
+          gh release edit v2.0.0-dev --notes-file releases/v2.0.0-dev.md
