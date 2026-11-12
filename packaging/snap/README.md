@@ -4,8 +4,10 @@ Generate both `dist/sandbox/snap-amd64/snap/snapcraft.yaml` and the arm64
 counterpart using `VERSION=v1.2.3 bash scripts/package-sandbox.sh` after creating
 release binaries. Only nyist-connect is shipped; no daemon, install hook,
 auto-start, interface auto-connect or automatic service installation is defined.
-URLs and SHA-256 are pinned to that release and computed from local dist assets.
-The source-checksum field verifies the downloaded binary before staging it.
+URLs and SHA-256 are pinned to that release and computed from the portable CLI
+archive (`authingnyist-cli-extras-VERSION.tar.gz`, or `CLI_ARCHIVE`).
+The source-checksum field verifies the downloaded tar archive before staging
+`cli/nyist-connect-linux-<arch>` from it.
 
 We choose **classic** because nyist-connect uses host sysfs, NetworkManager's
 nmcli, configuration credentials, and optional explicit host systemd operations.
@@ -36,7 +38,7 @@ are not Snap-managed services; no service is enabled by packaging. Classic Snap
 is not a TUN/VPN or hardware-binding bypass. Join campus networking first; use nyist-connect with explicit
 `--network nyist-stu` or `nyist-tec` where appropriate.
 `bash scripts/package-sandbox.sh test` validates generation without Snapcraft.
-The nil-plugin/file-source recipe uses common Snapcraft source properties;
+The nil-plugin/tar-source recipe uses common Snapcraft source properties;
 Snapcraft/schema validation and actual core24 provider builds were not available
 in the implementation environment. Treat generated YAML as unverified until an
 explicit Snapcraft build succeeds; static tests do not establish installability.

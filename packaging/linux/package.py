@@ -33,36 +33,34 @@ def stage(path, binaries):
         target.chmod(0o644)
 
 
-def make_aur(out, version, tag, repo, inputs):
-    # Checksums are computed from the exact local release assets, never SKIP.
-    srcinfo = ['pkgbase = nyist-connect-bin', f'\tpkgver = {version.replace("-", "_")}', '\tpkgrel = 1', '\tpkgdesc = NYIST campus network connector and authentication CLI', f'\turl = https://github.com/{repo}', '\tarch = x86_64', '\tarch = aarch64', '\tlicense = GPL-3.0-or-later', '\tprovides = nyist-connect', '\tconflicts = nyist-connect', '\toptions = !strip']
-    lines = ['# Generated from release assets; publish these exact bytes at the URLs below.',
-             'pkgname=nyist-connect-bin', f'pkgver={version.replace("-", "_")}', 'pkgrel=1',
+def make_aur(out, version, tag, repo, cli_archive):
+    # The portable CLI archive carries both architectures and the documents, so
+    # AUR pins one immutable release asset instead of a per-architecture matrix.
+    digest = hashlib.sha256(cli_archive.read_bytes()).hexdigest()
+    url = f'https://github.com/{repo}/releases/download/{tag}/{cli_archive.name}'
+    pkgver = version.replace('-', '_').replace('+', '.')
+    common = ['pkgbase = nyist-connect-bin', f'\tpkgver = {pkgver}', '\tpkgrel = 1',
+              '\tpkgdesc = NYIST campus network connector and authentication CLI',
+              f'\turl = https://github.com/{repo}', '\tarch = x86_64', '\tarch = aarch64',
+              '\tlicense = GPL-3.0-or-later', '\tprovides = nyist-connect',
+              '\tconflicts = nyist-connect', '\toptions = !strip',
+              f'\tsource = {cli_archive.name}::{url}', f'\tsha256sums = {digest}']
+    lines = ['# Generated from the release CLI archive; publish these exact bytes at the URL below.',
+             'pkgname=nyist-connect-bin', f'pkgver={pkgver}', 'pkgrel=1',
              "pkgdesc='NYIST campus network connector and authentication CLI'",
-             "arch=('x86_64' 'aarch64')", f"url='https://github.com/{repo}'", "license=('GPL-3.0-or-later')",
-             "provides=('nyist-connect')", "conflicts=('nyist-connect')", "options=('!strip')"]
-    for goarch, (_, arch) in ARCHES.items():
-        assets = [f'nyist-connect-linux-{goarch}']
-        sources = [(name, inputs / name) for name in assets] + [(name, ROOT / name) for name in DOCS]
-        lines.append(f'source_{arch}=(')
-        for name, _ in sources:
-            # Documentation names are shared across architectures in a single release.
-            lines.append(f"  '{name}::https://github.com/{repo}/releases/download/{tag}/{name}'")
-        lines.append(')')
-        srcinfo.extend(f'\tsource_{arch} = {name}::https://github.com/{repo}/releases/download/{tag}/{name}' for name, _ in sources)
-        srcinfo.extend(f'\tsha256sums_{arch} = {hashlib.sha256(path.read_bytes()).hexdigest()}' for _, path in sources)
-        lines.append(f'sha256sums_{arch}=(')
-        lines.extend(f"  '{hashlib.sha256(path.read_bytes()).hexdigest()}'" for _, path in sources)
-        lines.append(')')
+             "arch=('x86_64' 'aarch64')", f"url='https://github.com/{repo}'",
+             "license=('GPL-3.0-or-later')", "provides=('nyist-connect')",
+             "conflicts=('nyist-connect')", "options=('!strip')",
+             f"source=('{cli_archive.name}::{url}')", f"sha256sums=('{digest}')"]
     lines += ['', 'package() {', '  case "$CARCH" in',
-              '    x86_64) gui=nyist-connect-linux-amd64 ;;',
-              '    aarch64) gui=nyist-connect-linux-arm64 ;;',
+              '    x86_64) gui=cli/nyist-connect-linux-amd64 ;;',
+              '    aarch64) gui=cli/nyist-connect-linux-arm64 ;;',
               '  esac', '  install -Dm755 "$srcdir/$gui" "$pkgdir/usr/bin/nyist-connect"',
-              '  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/nyist-connect/LICENSE"',
-              '  install -Dm644 "$srcdir/README.md" "$pkgdir/usr/share/doc/nyist-connect/README.md"',
-              '  install -Dm644 "$srcdir/NYIST-CONNECT.md" "$pkgdir/usr/share/doc/nyist-connect/NYIST-CONNECT.md"', '}']
+              '  install -Dm644 "$srcdir/docs/LICENSE" "$pkgdir/usr/share/licenses/nyist-connect/LICENSE"',
+              '  install -Dm644 "$srcdir/docs/README.md" "$pkgdir/usr/share/doc/nyist-connect/README.md"',
+              '  install -Dm644 "$srcdir/docs/NYIST-CONNECT.md" "$pkgdir/usr/share/doc/nyist-connect/NYIST-CONNECT.md"', '}']
     (out / 'PKGBUILD').write_text('\n'.join(lines) + '\n')
-    (out / '.SRCINFO').write_text('\n'.join(srcinfo + ['', 'pkgname = nyist-connect-bin']) + '\n')
+    (out / '.SRCINFO').write_text('\n'.join(common + ['', 'pkgname = nyist-connect-bin']) + '\n')
 
 
 def main():
@@ -74,6 +72,7 @@ def main():
     p.add_argument('--output-dir', type=Path, default=ROOT / 'dist/linux')
     p.add_argument('--repo', default='GUYU2233/AuthingNYIST', help='GitHub owner/repository for pinned AUR URLs')
     p.add_argument('--tag', help='release tag (default vVERSION)')
+    p.add_argument('--cli-archive', type=Path, help='portable CLI extras archive (default dist/authingnyist-cli-extras-VERSION.tar.gz)')
     a = p.parse_args()
     if a.version and a.version.startswith('v'):
         a.version = a.version[1:]
@@ -91,10 +90,13 @@ def main():
         formats = {'deb', 'rpm', 'arch', 'aur'}
     arches = a.arch or list(ARCHES)
     inputs, out = a.input_dir.resolve(), a.output_dir.resolve()
+    cli_archive = (a.cli_archive or inputs / f'authingnyist-cli-extras-{a.version}.tar.gz').resolve()
     out.mkdir(parents=True, exist_ok=True)
     for tool, fmt in [('dpkg-deb', 'deb'), ('rpmbuild', 'rpm'), ('zstd', 'arch')]:
         if fmt in formats and not shutil.which(tool):
             p.error(f'{fmt} requires {tool}; install it or select other --format values')
+    if 'aur' in formats and (not cli_archive.is_file() or cli_archive.stat().st_size == 0):
+        p.error(f'missing nonempty CLI archive for AUR: {cli_archive}')
     required = list(ARCHES) if 'aur' in formats else arches
     for arch in required:
         for name in (f'nyist-connect-linux-{arch}',):
@@ -161,7 +163,7 @@ def main():
                     shutil.copyfile(rpm, out / rpm.name)
                     assets.append(rpm.name)
     if 'aur' in formats:
-        make_aur(out, a.version, tag, a.repo, inputs)
+        make_aur(out, a.version, tag, a.repo, cli_archive)
         aur_name = f'nyist-connect-aur-{a.version}.tar.gz'
         with tarfile.open(out / aur_name, 'w:gz') as tar:
             for name in ('PKGBUILD', '.SRCINFO'):

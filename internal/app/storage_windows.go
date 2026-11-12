@@ -13,7 +13,7 @@ import (
 
 const protectedPrefix = "dpapi:"
 
-func protectPassword(s string) (string, error) {
+func protectPassword(_ string, s string) (string, error) {
 	if s == "" {
 		return "", nil
 	}

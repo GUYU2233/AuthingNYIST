@@ -12,6 +12,14 @@ import (
 	"strings"
 )
 
+// ErrPasswordUnavailable reports that config.json is valid but the stored
+// password could not be recovered (a stale keyring entry, or a Windows DPAPI
+// blob loaded on another platform). Load returns the rest of the settings
+// together with this error so a UI can keep the account visible, leave the
+// password empty, and ask the user to enter it again. Callers must not treat
+// it as "no configuration".
+var ErrPasswordUnavailable = errors.New("stored password is unavailable")
+
 type Config struct {
 	Network        string `json:"network"`
 	Username       string `json:"username"`
@@ -83,7 +91,11 @@ func Load(path string) (Config, error) {
 	}
 	c.Password, e = unprotectPassword(c.Password)
 	if e != nil {
-		return DefaultConfig(), e
+		// Keep the remaining settings so the UI can still show the account,
+		// but blank the password: a stale keyring reference must disable
+		// connecting rather than silently authenticate with a wrong value.
+		c.Password = ""
+		return c, fmt.Errorf("%w: %v", ErrPasswordUnavailable, e)
 	}
 	if e = c.Validate(); e != nil {
 		return DefaultConfig(), e
@@ -94,7 +106,7 @@ func Save(path string, cfg Config) error {
 	if e := cfg.Validate(); e != nil {
 		return e
 	}
-	p, e := protectPassword(cfg.Password)
+	p, e := protectPassword(path, cfg.Password)
 	if e != nil {
 		return e
 	}

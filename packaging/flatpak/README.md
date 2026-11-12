@@ -3,9 +3,10 @@
 Generate with `VERSION=v1.2.3 bash scripts/package-sandbox.sh` (or pass the version
 as argument). Optional positional arguments: release binary directory, output
 directory, and `generate|flatpak|snap`. The defaults are `dist`, `dist/sandbox`,
-and `generate`. Both amd64/arm64 nyist-connect Linux binaries must already exist; recipes
-pin the matching GitHub release URLs and SHA-256 computed from those files.
-Publish those exact binaries under the matching tag before remote builds.
+and `generate`. The portable CLI archive
+`dist/authingnyist-cli-extras-VERSION.tar.gz` must already exist (or be passed via
+the `CLI_ARCHIVE` environment variable); recipes pin its GitHub release URL and
+SHA-256. Publish that exact archive under the matching tag before remote builds.
 Semantic versions including prereleases are accepted; no `latest`, branches or placeholders.
 The exact tag (including presence or absence of `v`) is preserved in source URLs.
 

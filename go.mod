@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/charmbracelet/huh v0.6.0
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/juju/loggo v0.0.0-20210728185423-eebad3a902c4
 	github.com/lxn/walk v0.0.0-20210112085537-c389da54e794
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e

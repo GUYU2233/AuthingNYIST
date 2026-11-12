@@ -13,7 +13,7 @@
 
 ## 包管理器发行
 
-构建阶段安装 `rpm zstd libarchive-tools apt-utils createrepo-c python3`，以 tag 为 VERSION 运行 `scripts/package-distributions.sh`。非标签构建使用 `0.0.0-dev`，仅用于验证，不能当作正式包发布。产物包含 DEB / RPM / Pacman 包、AUR 配方、APT / RPM 仓库归档、Flatpak / Snap manifest 及 Homebrew / MacPorts / Nix 固定哈希配方。所有分发附件必须列入生产脚本的 manifest 后才计入 `SHA256SUMS.txt` 和 release 白名单。
+构建阶段安装 `rpm zstd libarchive-tools apt-utils createrepo-c python3`，以 tag 为 VERSION 运行 `scripts/package-distributions.sh`。非标签构建使用 `0.0.0-dev`，仅用于验证，不能当作正式包发布。默认只生成 DEB / RPM；设置 `BUILD_EXTRAS=1` 时还会生成 Pacman 包、AUR 配方、APT / RPM 仓库归档、Flatpak / Snap manifest、Homebrew / MacPorts / Nix 固定哈希配方及 shell 补全，供本地使用。Release 只保留 8 个附件：EXE、双架构 DMG、双架构 DEB、双架构 RPM 和 `SHA256SUMS.txt`（配方、AUR、Arch、沙盒与仓库素材仅在 `BUILD_EXTRAS=1` 时本地生成，不上传）；`scripts/check-release-assets.sh` 校验白名单，未被列入生产脚本 manifest 的产物不会进入 `SHA256SUMS.txt`，也不会进入 release。
 
 软件源归档默认未签名；上架商店、创建公开 tap、提交 AUR / MacPorts / nixpkgs 和部署 HTTPS 软件源不是本流程自动执行的操作。完整安装、签名与验证边界见 [包管理器与发行渠道](PACKAGING.md)。
 

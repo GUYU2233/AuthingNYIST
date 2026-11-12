@@ -22,7 +22,9 @@ import (
 // for one JSON value; failures use stderr and exit 1. Credentials never use argv.
 func DarwinMain(args []string) int {
 	if err := macMain(context.Background(), args, os.Stdin, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "错误:", err)
+		if !errors.Is(err, errDoctorBlocking) {
+			fmt.Fprintln(os.Stderr, "错误:", err)
+		}
 		return 1
 	}
 	return 0
@@ -31,7 +33,7 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 	flags := flag.NewFlagSet("nyist", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	var path, autostart, network string
-	var connect, status, disconnect, daemon, statusJSON, configJSON, saveJSON, configure, system, checkUpdate, showVersion bool
+	var connect, status, disconnect, daemon, statusJSON, configJSON, saveJSON, configure, system, checkUpdate, showVersion, doctor bool
 	flags.StringVar(&path, "config", "", "配置文件路径（密码以0600权限明文保存，未使用Keychain）")
 	flags.BoolVar(&connect, "connect", false, "认证连接")
 	flags.BoolVar(&status, "status", false, "只读网络状态")
@@ -46,6 +48,7 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 	flags.StringVar(&network, "network", "", "auto|nyist-tec|nyist-stu；未指定时检测当前校园 Wi-Fi")
 	flags.BoolVar(&checkUpdate, "check-update", false, "检查 GitHub 最新稳定 Release，不自动安装")
 	flags.BoolVar(&showVersion, "version", false, "显示构建版本")
+	flags.BoolVar(&doctor, "doctor", false, "只读诊断配置、网络、DNS 与保活状态（不需要密码）")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -59,7 +62,7 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 		return errors.New("unsupported: macOS launchd/autostart/system service is not implemented; --daemon runs in the foreground only")
 	}
 	count := 0
-	for _, yes := range []bool{connect, status, disconnect, daemon, statusJSON, configJSON, saveJSON, configure, checkUpdate, showVersion} {
+	for _, yes := range []bool{connect, status, disconnect, daemon, statusJSON, configJSON, saveJSON, configure, checkUpdate, showVersion, doctor} {
 		if yes {
 			count++
 		}
@@ -94,6 +97,9 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 	if err != nil {
 		return errors.New("invalid configuration path")
 	}
+	if doctor {
+		return runDoctor(ctx, out, newDoctorOptions(path))
+	}
 	if saveJSON {
 		cfg, err := macDecodeConfig(in)
 		if err != nil {
@@ -103,7 +109,12 @@ func macMain(ctx context.Context, args []string, in *os.File, out, errOut io.Wri
 	}
 	cfg, err := app.Load(path)
 	if err != nil {
-		return err
+		if !errors.Is(err, app.ErrPasswordUnavailable) {
+			return err
+		}
+		// Keep the account and network; the password is empty so nothing can
+		// authenticate until the user enters it again.
+		fmt.Fprintln(errOut, "已保存的密码无法恢复，请在设置中重新输入。")
 	}
 	if configJSON {
 		return json.NewEncoder(out).Encode(cfg)

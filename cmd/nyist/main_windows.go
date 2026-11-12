@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"image/png"
@@ -80,6 +81,14 @@ func main() {
 	}
 	defer windows.CloseHandle(mutex)
 	cfg, err := app.Load(absPath)
+	// A config whose stored secret cannot be recovered is still usable: keep the
+	// account visible, start with an empty password, and let the user re-enter it.
+	// Anything else (bad JSON, invalid settings) is a real failure.
+	passwordMissing := false
+	if errors.Is(err, app.ErrPasswordUnavailable) {
+		passwordMissing = true
+		err = nil
+	}
 	if err != nil {
 		fatal(fmt.Errorf("读取配置失败: %w", err))
 		return
@@ -108,6 +117,9 @@ func main() {
 	}
 	// Startup probes are read-only; only the existing saved opt-in can authenticate.
 	ui.startup()
+	if passwordMissing {
+		ui.setStatus("已保存的密码无法恢复，请在账号设置中重新输入")
+	}
 	ui.checkUpdates(false)
 	ui.mw.Run()
 }

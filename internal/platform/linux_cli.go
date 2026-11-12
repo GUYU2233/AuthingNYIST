@@ -25,7 +25,11 @@ import (
 // LinuxMain is the Linux-only terminal entry point. It returns an exit code.
 func LinuxMain(args []string) int {
 	if err := linuxMain(args, os.Stdin, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "错误:", err)
+		// The doctor report already explains blocking checks; only the exit
+		// code should signal failure.
+		if !errors.Is(err, errDoctorBlocking) {
+			fmt.Fprintln(os.Stderr, "错误:", err)
+		}
 		return 1
 	}
 	return 0
@@ -34,7 +38,7 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet("nyist", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	var config, autostart, network string
-	var daemon, connect, status, disconnect, system, statusJSON, checkUpdate, showVersion bool
+	var daemon, connect, status, disconnect, system, statusJSON, checkUpdate, showVersion, doctor, trayMode bool
 	flags.StringVar(&config, "config", "", "配置文件路径（转换为绝对路径）")
 	flags.BoolVar(&daemon, "daemon", false, "前台运行保活守护进程（供 systemd 使用）")
 	flags.BoolVar(&connect, "connect", false, "认证连接")
@@ -46,6 +50,8 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	flags.BoolVar(&statusJSON, "status-json", false, "只读状态 JSON，不需要密码")
 	flags.BoolVar(&checkUpdate, "check-update", false, "检查 GitHub 最新稳定 Release（不自动安装）")
 	flags.BoolVar(&showVersion, "version", false, "显示构建版本")
+	flags.BoolVar(&doctor, "doctor", false, "只读诊断配置、网络、DNS 与保活状态（不需要密码）")
+	flags.BoolVar(&trayMode, "tray", false, "显示托盘图标并保活（需要托盘宿主）")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -56,13 +62,13 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 		return fmt.Errorf("不支持的位置参数")
 	}
 	count := 0
-	for _, v := range []bool{daemon, connect, status, disconnect, autostart != "", statusJSON, checkUpdate, showVersion} {
+	for _, v := range []bool{daemon, connect, status, disconnect, autostart != "", statusJSON, checkUpdate, showVersion, doctor, trayMode} {
 		if v {
 			count++
 		}
 	}
 	if count > 1 {
-		return fmt.Errorf("操作参数只能选择一个（--daemon/--connect/--status/--status-json/--disconnect/--autostart/--check-update/--version）")
+		return fmt.Errorf("操作参数只能选择一个（--daemon/--connect/--status/--status-json/--disconnect/--autostart/--check-update/--version/--doctor/--tray）")
 	}
 	if autostart != "" && autostart != "enable" && autostart != "disable" && autostart != "status" {
 		return fmt.Errorf("--autostart 必须是 enable、disable 或 status")
@@ -88,12 +94,25 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if doctor {
+		opts := newDoctorOptions(config)
+		opts.keepalive = func(ctx context.Context) (string, error) {
+			return linuxDoctorKeepalive(ctx, config, system)
+		}
+		return runDoctor(context.Background(), out, opts)
+	}
 	cfg, err := app.Load(config)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return err
+			if !errors.Is(err, app.ErrPasswordUnavailable) {
+				return err
+			}
+			// The rest of the configuration is still valid: keep the account and
+			// network, leave the password empty, and let the user re-enter it.
+			fmt.Fprintln(out, "已保存的密码无法恢复，请在账号设置中重新输入。")
+		} else {
+			cfg = app.DefaultConfig()
 		}
-		cfg = app.DefaultConfig()
 	}
 	if network != "" {
 		cfg.Network = network
@@ -181,11 +200,17 @@ func linuxMain(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	if daemon {
 		fmt.Fprintln(out, "保活守护中；SIGINT/SIGTERM 停止进程，不主动登出。")
-		err = app.Run(ctx, cfg, report)
+		err = app.Run(ctx, cfg, report, linuxNotifyOptions())
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
 		return err
+	}
+	if trayMode {
+		if e := linuxCredentials(cfg); e != nil {
+			return e
+		}
+		return runLinuxTray(ctx, cfg, config, out)
 	}
 	if !term.IsTerminal(int(in.Fd())) {
 		return fmt.Errorf("交互菜单需要终端；脚本请使用 --connect/--status/--daemon 等参数")
@@ -219,7 +244,7 @@ func linuxStartBackground(executable, config string) (int, error) {
 	if !filepath.IsAbs(executable) || !filepath.IsAbs(config) {
 		return 0, fmt.Errorf("后台进程要求绝对路径")
 	}
-	log, err := os.OpenFile(filepath.Join(filepath.Dir(config), "nyist-daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	log, err := openDaemonLog(filepath.Join(filepath.Dir(config), "nyist-daemon.log"))
 	if err != nil {
 		return 0, err
 	}

@@ -307,43 +307,20 @@ func authenticate(ctx context.Context, cfg Config, logout bool) error {
 // Run monitors every 30 seconds, reconnecting when necessary. At most five
 // consecutive transient failures are retried with 2/4/8/16 second backoff.
 // Authentication rejections and conflicting accounts stop immediately.
-func Run(ctx context.Context, cfg Config, report func(Status)) error {
-	if e := requireCredentials(cfg); e != nil {
-		return e
-	}
-	failures := 0
-	for {
-		if e := ctx.Err(); e != nil {
-			return e
+//
+// Run also recovers promptly after a suspend or a large forward clock jump
+// (a monotonic/wall-clock watchdog) and after a debounced campus-network change.
+// The optional RunOptions carries failure/recovery notifications; Run with no
+// options behaves exactly as before. RunWithOptions is the explicit form.
+func Run(ctx context.Context, cfg Config, report func(Status), options ...RunOptions) error {
+	var opts RunOptions
+	for _, o := range options {
+		if o.OnFailure != nil {
+			opts.OnFailure = o.OnFailure
 		}
-		s, e := Connect(ctx, cfg)
-		if e == nil {
-			failures = 0
-			if report != nil {
-				report(s)
-			}
-		} else {
-			if report != nil {
-				report(Status{Message: e.Error()})
-			}
-			if errors.Is(e, ErrCredentials) || errors.Is(e, ErrOtherAccount) {
-				return e
-			}
-			failures++
-			if failures >= 5 {
-				return e
-			}
-		}
-		delay := 30 * time.Second
-		if failures > 0 {
-			delay = time.Duration(1<<uint(failures)) * time.Second
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
+		if o.OnRecovered != nil {
+			opts.OnRecovered = o.OnRecovered
 		}
 	}
+	return RunWithOptions(ctx, cfg, report, opts)
 }

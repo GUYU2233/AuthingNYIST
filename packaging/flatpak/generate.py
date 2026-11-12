@@ -11,28 +11,24 @@ import sys
 APP_ID = 'io.github.GUYU2233.AuthingNYIST'
 
 
-def generate(root, version, dist, out):
+def generate(root, version, dist, out, cli_archive=None):
     semver = r'v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
     if not re.fullmatch(semver, version, re.ASCII):
         raise ValueError('VERSION must be a safe semantic release version, e.g. v1.2.3 or 0.0.0-dev')
     tag = version  # Preserve the exact release tag, including optional v prefix.
     version = version.removeprefix('v')
     base = f'https://github.com/GUYU2233/AuthingNYIST/releases/download/{tag}/'
-    records = {}
-    for arch in ['amd64', 'arm64']:
-        for command, asset in [('nyist-connect', f'nyist-connect-linux-{arch}')]:
-            path = dist / asset
-            if not path.is_file() or path.stat().st_size == 0:
-                raise ValueError(f'Missing or empty release asset: {path}')
-            records[(arch, command)] = (asset, hashlib.sha256(path.read_bytes()).hexdigest())
+    cli_archive = pathlib.Path(cli_archive) if cli_archive else dist / f'authingnyist-cli-extras-{version}.tar.gz'
+    if (not cli_archive.is_file() or cli_archive.is_symlink()
+            or cli_archive.stat().st_size == 0):
+        raise ValueError(f'Missing, empty, or symlink CLI archive: {cli_archive}')
+    if cli_archive.name != f'authingnyist-cli-extras-{version}.tar.gz':
+        raise ValueError(f'CLI archive name does not match VERSION: {cli_archive.name}')
+    cli_digest = hashlib.sha256(cli_archive.read_bytes()).hexdigest()
     # Validate every input before writing any output.
     out.mkdir(parents=True, exist_ok=True)
     for arch, fp_arch in [('amd64', 'x86_64'), ('arm64', 'aarch64')]:
-        sources = []
-        for command in ['nyist-connect']:
-            asset, digest = records[(arch, command)]
-            sources.append({'type': 'file', 'url': base + asset, 'sha256': digest,
-                            'dest-filename': command})
+        sources = [{'type': 'archive', 'url': base + cli_archive.name, 'sha256': cli_digest}]
         metadata = (root / 'packaging/flatpak' / f'{APP_ID}.metainfo.xml').read_text()
         sources.append({'type': 'inline', 'dest-filename': f'{APP_ID}.metainfo.xml', 'contents': metadata})
         manifest = {'app-id': APP_ID, 'runtime': 'org.freedesktop.Platform',
@@ -40,23 +36,20 @@ def generate(root, version, dist, out):
                     'command': 'nyist-connect', 'finish-args': ['--share=network'],
                     'modules': [{'name': 'nyist-connect', 'buildsystem': 'simple',
                                  'build-commands': [
-                                     'install -Dm755 nyist-connect /app/bin/nyist-connect',
+                                     f'install -Dm755 cli/nyist-connect-linux-{arch} /app/bin/nyist-connect',
                                      f'install -Dm644 {APP_ID}.metainfo.xml /app/share/metainfo/{APP_ID}.metainfo.xml'],
                                  'sources': sources}]}
         (out / f'{APP_ID}-{fp_arch}.json').write_text(json.dumps(manifest, indent=2) + '\n')
         snap_dir = out / f'snap-{arch}' / 'snap'
         snap_dir.mkdir(parents=True, exist_ok=True)
-        parts = []
-        for command in ['nyist-connect']:
-            asset, digest = records[(arch, command)]
-            parts.append(f'''  {command}:
+        parts = [f'''  nyist-connect:
     plugin: nil
-    source: {base + asset}
-    source-type: file
-    source-checksum: sha256/{digest}
+    source: {base + cli_archive.name}
+    source-type: tar
+    source-checksum: sha256/{cli_digest}
     override-build: |
-      install -Dm755 {asset} "$CRAFT_PART_INSTALL/bin/{command}"
-''')
+      install -Dm755 cli/nyist-connect-linux-{arch} "$CRAFT_PART_INSTALL/bin/nyist-connect"
+''']
         recipe = f'''name: nyist-connect
 version: '{version}'
 summary: NYIST campus network terminal clients
@@ -82,10 +75,12 @@ def main():
     version = sys.argv[2]
     dist = pathlib.Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else root / 'dist'
     out = pathlib.Path(sys.argv[4]).resolve() if len(sys.argv) > 4 else root / 'dist/sandbox'
+    import os
+    cli_archive = os.environ.get('CLI_ARCHIVE')
     action = sys.argv[5] if len(sys.argv) > 5 else 'generate'
     if action not in ('generate', 'flatpak', 'snap'):
         raise ValueError('action must be generate, flatpak or snap')
-    version = generate(root, version, dist, out)
+    version = generate(root, version, dist, out, cli_archive)
     if action == 'flatpak':
         for tool in ['flatpak', 'flatpak-builder']:
             if not shutil.which(tool):

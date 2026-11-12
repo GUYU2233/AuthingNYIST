@@ -31,3 +31,9 @@ Only `Connect` invokes `EnsureNetwork` (the monitor calls `Connect`). `Check`, c
 Portal operations use context-aware requests, a 12-second HTTP timeout, bounded response bodies and no redirected authentication. A successful authentication is followed by an exact-account status check. The protocol reuses only the existing pure encoding functions, avoiding legacy request logging.
 
 `Run` reports meaningful status, checks every 30 seconds, and retries at most five consecutive transient failures with 2/4/8/16-second waits before returning the fifth failure. Any portal authentication rejection is terminal (even if potentially transient), preventing password lockouts and hot loops. Conflicting accounts are terminal too. Cancellation interrupts HTTP, OS commands and waits; cancellation does not log out.
+
+The monitor also recovers from suspend and clock jumps and from a changed campus network:
+
+- Waits are sampled in five-second slices and compared with the requested delay. When the observed wall time exceeds the expected delay by more than twice the 30-second interval plus five seconds (`ResumeDetected`/`ResumeThreshold`), the loop treats the process as resumed and checks immediately instead of waiting for the next tick.
+- The associated campus network is detected once per iteration (bounded by the existing 3-second detection timeout). A different network must be observed twice in a row and forced rechecks are at least 30 seconds apart. A confirmed change resets the transient-failure budget and reconnects once; detection errors are logged once and keep the previous settings.
+- Optional `RunOptions` callbacks notify the platform layer once per failure episode (`OnFailure`) and once when a later check succeeds (`OnRecovered`). `Run(ctx, cfg, report)` keeps its historical behavior; pass options via `RunWithOptions(ctx, cfg, report, RunOptions{...})` or `Run(ctx, cfg, report, opts)`.

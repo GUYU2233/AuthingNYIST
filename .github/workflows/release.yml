@@ -36,6 +36,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          bash scripts/check-release-assets.sh dist
           cd dist
           sha256sum --check SHA256SUMS.txt
           assets=()

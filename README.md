@@ -15,11 +15,14 @@
 | 功能 | Windows | Linux | macOS |
 | --- | --- | --- | --- |
 | nyist-tec / nyist-stu 选择 | 原生窗口下拉选择 | 终端交互菜单 | 原生窗口 / 终端菜单 |
-| 账号密码与配置保存 | 当前用户 DPAPI 加密密码 | 目录 0700 / 文件 0600，密码明文 | 文件 0600，密码明文，非 Keychain |
+| 账号密码与配置保存 | 当前用户 DPAPI 加密密码 | 系统密钥环（Secret Service），不可用时回退到 0600 明文 | 文件 0600，密码明文，非 Keychain |
 | 认证、状态检查、确认注销 | 窗口与托盘菜单 | 菜单与命令参数 | 原生窗口及 CLI |
 | 自动连接与在线检查 | 可选启动自动连接 | 后台守护模式 | 连接后前台子进程保活 |
 | 自启动 | 当前用户登录启动 / 经 UAC 授权的开机认证服务 | systemd user / 显式 system 服务 | 暂不支持 |
-| 后台与退出 | 最小化到托盘、关闭留后台、右键打开/退出 | 后台 PID、systemd 服务管理 | 菜单栏后台；退出停止保活、不注销 |
+| 后台与退出 | 最小化到托盘、关闭留后台、右键打开/退出 | 托盘图标、后台 PID、systemd 服务管理 | 菜单栏后台；退出停止保活、不注销 |
+| 睡眠唤醒 / 换网恢复 | 保活循环内自动恢复 | 保活循环内自动恢复 | 保活循环内自动恢复 |
+| 失败通知 | 窗口状态栏与托盘提示 | 桌面通知（`--tray` 或 `--daemon`） | 窗口状态栏；终端版输出日志 |
+| 诊断 | — | `--doctor` | `--doctor` |
 
 统一使用 `nyist-connect`，应用入口为 `cmd/nyist`。经典 `auth-nyist` 及其一键脚本已移除；旧版配置不会自动迁移，请在账号设置中重新填写。
 
@@ -58,7 +61,7 @@ Windows EXE 也提供后台网络/状态检测与启动版本检查；确认下�
 
 面向 macOS 13 及以上系统，提供 Apple Silicon（arm64）和 Intel（amd64）两个架构的原生应用与 DMG 打包流程，界面包含网络选择、账号密码、连接、状态、确认注销以及菜单栏后台。macOS 版不支持 Windows 的高优先级开机服务，也未实现登录自启动。
 
-- DMG：`NYIST-Connect-macos-arm64.dmg` / `NYIST-Connect-macos-amd64.dmg`；将应用拖入 Applications 后运行。
+- DMG：`NYIST-Connect-macos-arm64.dmg` / `NYIST-Connect-macos-amd64.dmg`；将应用拖入 Applications 后运行。Cask 配方不随 Release 分发，需要时在仓库内 `BUILD_EXTRAS=1` 运行打包脚本生成 `homebrew/Casks/nyist-connect.rb`，放进自己的 tap 后执行 `brew install --cask <tap>/nyist-connect`；官方仓库不托管公开 tap。
 - 终端版：`nyist-connect-macos-arm64` / `nyist-connect-macos-amd64`。
 - 密码按权限受限的明文配置存储（0600），**不是 Keychain 加密**；不要共享配置。
 - Wi-Fi 需要先在系统中连接并保存对应校园网络；系统隐私/网络权限可能使 SSID 被隐藏，程序此时保守拒绝认证。仅手动连接不一定解决，仍需允许读取 SSID 或使用可验证的有线默认路由。
@@ -87,10 +90,15 @@ Linux 交互界面使用开源 **Charmbracelet Huh（基于 Bubble Tea）**，�
 ./nyist-connect-linux-amd64 --autostart enable
 ./nyist-connect-linux-amd64 --autostart status
 ./nyist-connect-linux-amd64 --autostart disable
+./nyist-connect-linux-amd64 --doctor
+./nyist-connect-linux-amd64 --tray
 ```
 
 - 可指定 `--config /绝对路径/config.json`，动作参数互斥。
-- 默认配置：`~/.config/AuthingNYIST/config.json`（遵循 `XDG_CONFIG_HOME`）。Linux 密码为权限受限的明文，不要共享或提交。
+- 默认配置：`~/.config/AuthingNYIST/config.json`（遵循 `XDG_CONFIG_HOME`）。Linux 密码优先存入系统密钥环（freedesktop Secret Service，`secret-tool`），配置文件中只保留 `keyring:v1:` 引用；密钥环不可用（无桌面会话、无 Secret Service）时回退为 0600 权限的明文文件，并在保存后提示。密钥环被清空或换机后密码无法恢复，程序会保留账号并提示重新输入，不会用空密码认证。不要共享或提交配置文件。
+- `--doctor` 只读诊断配置、密码是否就绪、网络选择与当前网络、默认路由、代理环境变量（只报名称不报值）、DNS、门户 TCP 可达性与保活服务状态；诊断不打印密码，不修改配置或服务。门户 TCP 连通只能算提示，TUN 可能在本地接受连接，不能据此判断在线。
+- `--tray` 在系统托盘中显示状态并提供连接、断开、打开日志和退出，运行时同时执行保活。托盘用纯 Go D-Bus 实现（StatusNotifierItem），不需要 GTK 或 cgo。GNOME 自身没有托盘，需要安装 AppIndicator/KStatusNotifierItem 扩展；没有托盘宿主时命令会立即报错并建议改用 `--daemon`，不会注册一个看不见的图标。
+- 保活失败与恢复会发送桌面通知（`org.freedesktop.Notifications`，缺失时退回 `notify-send`）；通知失败不影响保活本身。
 - 默认 systemd **用户服务**依赖登录；启用/移除自启动不会立即启动/停止联网。立即运行可用菜单后台动作或 `systemctl --user start nyist-auth.service`。
 - 管理员可明确配置 linger，或使用 root `--system` 管理系统服务；程序不会自动开启 linger。
 - 没有 systemd 仍可交互使用或手动后台运行；注销前先停止其他保活实例。
@@ -158,7 +166,7 @@ go build -trimpath -o nyist-connect ./cmd/nyist
 
 - **GitHub Actions**：main 提交 / PR 自动运行 Windows / Linux 测试、`go vet`、格式和脚本语法检查，Linux 共享核心 race 测试，Windows 原生 GUI 冒烟测试；通过后统一交叉编译全部发行二进制。日常构建产物 `release-bundle` 保留 14 天。
 - **校内 GitLab CI**：分支 / MR / 标签自动运行 Linux 测试、校验和全部平台交叉编译；保留 SAST 与 Secret Detection。Windows GUI 交叉编译不需要 Windows Runner，但真实 GUI 冒烟测试由 GitHub Windows Runner 执行。
-- **自动发行**：两端均在推送 `v*` 标签后发布 Windows GUI、Linux amd64 / arm64、macOS amd64 / arm64 终端版、说明文档、许可证与 `SHA256SUMS.txt`。GitHub 使用内置 `GITHUB_TOKEN`；GitLab 使用内置 `CI_JOB_TOKEN` 将文件存入 Generic Package Registry，再创建永久下载链接的 Release，无需个人访问令牌。失败可重跑同一标签流水线；请勿移动或复用已公开版本标签。
+- **自动发行**：两端均在推送 `v*` 标签后发布 8 个附件：Windows GUI、macOS 双架构 DMG、Linux amd64 / arm64 的 `.deb` 与 `.rpm`，以及覆盖全部文件的 `SHA256SUMS.txt`。AUR / Flatpak / Snap / Homebrew / MacPorts / Nix 配方、Arch 包、仓库元数据与 shell 补全仍可在仓库内用 `BUILD_EXTRAS=1` 生成，但不再作为发行附件；`scripts/check-release-assets.sh` 在 CI 中强制这份 8 项白名单。GitHub 使用内置 `GITHUB_TOKEN`；GitLab 使用内置 `CI_JOB_TOKEN` 将文件存入 Generic Package Registry，再创建永久下载链接的 Release，无需个人访问令牌。失败可重跑同一标签流水线；请勿移动或复用已公开版本标签。
 - 详细触发命令、Runner / 权限要求、校验和及失败排查见 [CI/CD 与发行指南](docs/CI-CD.md)。
 - 本地已验证 Windows GUI 与单元测试；Linux 运行时由 CI 的 Ubuntu 测试覆盖，**真实校园网络、桌面环境与 systemd 服务仍需在目标机器验证**。测试使用 mock / fake runner，不执行真实认证或服务变更。
 

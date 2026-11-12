@@ -71,12 +71,16 @@ chmod +x ./nyist-connect-linux-amd64
 ./nyist-connect-linux-amd64 --autostart enable
 ./nyist-connect-linux-amd64 --autostart status
 ./nyist-connect-linux-amd64 --autostart disable
+./nyist-connect-linux-amd64 --doctor
+./nyist-connect-linux-amd64 --tray
 ```
 
 动作参数互斥；均可额外指定 `--config /绝对路径/config.json`。
 
 - 默认配置 `$XDG_CONFIG_HOME/AuthingNYIST/config.json`，通常为 `~/.config/AuthingNYIST/config.json`。
-- Linux 密码为权限受限的明文文件（目录 0700、文件 0600），不是加密保险箱；不要上传或共享。
+- Linux 密码优先写入系统密钥环（freedesktop Secret Service，经 `secret-tool`），配置文件只保留 `keyring:v1:` 引用；密钥环不可用（无图形会话或未运行 Secret Service）时回退为目录 0700、文件 0600 的明文，并在保存后提示。密钥环条目被删除后密码无法恢复，程序保留账号并提示重新输入。不要把配置上传或共享。
+- `--doctor` 输出只读诊断：配置路径与权限、密码是否就绪、网络选项与当前网络是否一致、默认路由接口、代理环境变量名称、DNS、门户 TCP 可达性、保活服务状态。不打印密码，不修改任何设置；缺少配置、配置无效或密码为空才返回非零退出码。
+- `--tray` 在托盘显示状态，菜单提供连接（开始保活）、断开连接、打开日志和退出；退出托盘即停止保活，不会主动登出。实现为纯 Go 的 StatusNotifierItem + D-Bus 菜单，不需要 GTK/cgo；GNOME 需安装 AppIndicator/KStatusNotifierItem 扩展，没有托盘宿主时命令立即失败并提示改用 `--daemon`。保活失败与恢复会尝试发送桌面通知，通知不可用不影响保活。
 - 默认 `systemd --user`，**依赖用户登录及 user manager**。启用/移除自启动不立即启动/停止联网；立即运行用菜单后台动作，或 `systemctl --user start nyist-auth.service`。
 - 需要无人登录也运行时，可由管理员明确配置 linger，或以 root 使用 `--system --config /etc/nyist-connect/config.json --autostart enable`。本程序不会自动打开 linger。
 - system unit 可用 `sudo systemctl start nyist-auth.service` 即时启动；服务 `Restart=no`，避免错误密码导致无限重启。
@@ -91,7 +95,7 @@ chmod +x ./nyist-connect-linux-amd64
 - 默认 HTTPS 并验证服务器证书；不会自动回退 HTTP。账号/密码不写日志、不通过命令行参数传给外部程序。
 - 发现其他账号在线时拒绝自动覆盖/注销，避免误断网。需先在官方页面处理现有账号。
 - 普通界面与 Linux 后台保活最多容忍连续 5 次暂时性失败（退避 2/4/8/16 秒）后停止；认证拒绝立即停止。开机认证服务为等待网络就绪，对暂时性失败指数退避持续重试（最长 5 分钟），认证拒绝或其他账号在线则暂停，直到显式连接或重启服务。
-- Windows DPAPI 不防同用户恶意进程；Linux 文件权限不防 root。不要提交真实配置。
+- Windows DPAPI 不防同用户恶意进程；Linux 密钥环与文件权限都不防 root。不要提交真实配置。
 
 ## 从源码构建
 

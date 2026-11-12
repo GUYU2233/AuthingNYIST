@@ -35,29 +35,18 @@ if not tag.startswith("v"):
 if urlsplit(api).scheme not in ("http", "https") or urlsplit(api).username:
     fail("CI_API_V4_URL must be an HTTP(S) API URL without credentials")
 
-# Keep this allowlist aligned with package-release.sh; never glob dist/*.
-expected = {
-    "nyist-connect.exe", "nyist-connect-linux-amd64", "nyist-connect-linux-arm64",
-    "nyist-connect-macos-amd64", "nyist-connect-macos-arm64",
-    "README.md", "NYIST-CONNECT.md", "PACKAGING.md", "LICENSE", "SHA256SUMS.txt",
-}
 dist = Path("dist")
 manifest = dist / "release-assets.txt"
 if not manifest.is_file():
     fail("Missing dist/release-assets.txt; run package-release.sh first")
-# Match validated producer manifests; never admit arbitrary dist glob files.
-for producer in ("linux-assets.txt", "sandbox-assets.txt", "repositories-assets.txt", "distribution-assets.txt"):
-    source = dist / producer
-    if source.is_file():
-        for name in source.read_text(encoding="utf-8").splitlines():
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+~-]*", name):
-                fail("Unsafe distribution asset: " + name)
-            expected.add(name)
-if os.environ.get("ENABLE_MACOS_RUNNER") == "true":
-    expected.update(("NYIST-Connect-macos-amd64.dmg", "NYIST-Connect-macos-arm64.dmg"))
+# One allowlist for both forges: reject unlisted names, missing files, symlinks,
+# incomplete checksums, and anything that would break the in-app updater.
+result = subprocess.run(["bash", "scripts/check-release-assets.sh", str(dist)], check=False)
+if result.returncode:
+    fail("Release asset allowlist check failed")
 assets = manifest.read_text(encoding="utf-8").splitlines()
-if len(assets) != len(set(assets)) or set(assets) != expected:
-    fail("Release manifest must contain exactly the approved binaries, docs and checksums")
+if len(assets) != len(set(assets)):
+    fail("Release manifest contains duplicate names")
 for name in assets:
     path = dist / name
     if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", name) or path.is_symlink() or not path.is_file() or not path.stat().st_size:
@@ -82,8 +71,8 @@ for line in (dist / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
     if not match or match[2] in checksums:
         fail("Invalid or duplicate checksum entry")
     checksums[match[2]] = match[1].lower()
-if set(checksums) != expected - {"SHA256SUMS.txt"}:
-    fail("Checksum list must cover exactly the release binaries and docs")
+if set(checksums) != set(assets) - {"SHA256SUMS.txt"}:
+    fail("Checksum list must cover exactly the published assets")
 for name, checksum in checksums.items():
     if digest(dist / name) != checksum:
         fail("Checksum mismatch: " + name)
@@ -130,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix="gitlab-release-") as directory:
         else:
             request("PUT", link["url"], upload=dist / name)
 
-    description = "Tested AuthingNYIST binaries, documentation and SHA-256 checksums. Assets are stored in the persistent GitLab Generic Package Registry."
+    description = "Tested AuthingNYIST installers (Windows EXE, macOS DMGs, Linux deb/rpm) and SHA-256 checksums. Assets are stored in the persistent GitLab Generic Package Registry."
     if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", tag):
         notes = Path("releases") / (tag + ".md")
         if notes.is_file():

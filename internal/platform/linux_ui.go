@@ -33,6 +33,15 @@ func linuxUIAborted(err error) bool {
 	return errors.Is(err, huh.ErrUserAborted) || errors.Is(err, context.Canceled)
 }
 
+// linuxPasswordStorageNotice reports the one case worth telling the user about:
+// the password stayed in the 0600 configuration file because no Secret Service
+// was reachable. Silent when the keyring took it or no password was set.
+func linuxPasswordStorageNotice(out io.Writer, password string) {
+	if password != "" && app.PasswordStorage() == app.PasswordBackendFile {
+		fmt.Fprintln(out, "密码未存入系统密钥环，已按 0600 权限写入配置文件。")
+	}
+}
+
 func (ui linuxUI) operation(label string, action func(context.Context) error) error {
 	fmt.Fprintf(ui.out, "\n%s…（Ctrl+C 退出）\n", label)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -43,8 +52,10 @@ func (ui linuxUI) operation(label string, action func(context.Context) error) er
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return context.Canceled
 	}
-	if err != nil {
-		fmt.Fprintln(ui.out, "操作失败:", err)
+	if errors.Is(err, app.ErrOtherAccount) {
+		fmt.Fprintln(ui.out, "已有其他账号在线，当前连接保持不变。")
+	} else if err != nil {
+		fmt.Fprintln(ui.out, err)
 	}
 	return nil
 }
@@ -63,11 +74,13 @@ func runLinuxUI(in *os.File, out io.Writer, config, exe string, system bool,
 				huh.NewOption("网络状态", "status"),
 				huh.NewOption("账号设置", "config"),
 				huh.NewOption("连接校园网", "connect"),
-				huh.NewOption("启动后台保活", "background"),
-				huh.NewOption("启用自启动", "enable"),
+				huh.NewOption("开启后台保活", "background"),
+				huh.NewOption("开启托盘图标", "tray-on"),
+				huh.NewOption("关闭托盘图标", "tray-off"),
+				huh.NewOption("开启自启动", "enable"),
 				huh.NewOption("关闭自启动", "disable"),
 				huh.NewOption("自启动状态", "service-status"),
-				huh.NewOption("停止 systemd 保活", "stop"),
+				huh.NewOption("关闭 systemd 保活", "stop"),
 				huh.NewOption("检查更新", "update"),
 				huh.NewOption("登出校园网", "logout"),
 				huh.NewOption("退出", "exit"),
@@ -113,6 +126,7 @@ func runLinuxUI(in *os.File, out io.Writer, config, exe string, system bool,
 					return e
 				}
 				fmt.Fprintln(out, "配置已保存。")
+				linuxPasswordStorageNotice(out, next.Password)
 				return nil
 			})
 		} else {
@@ -149,6 +163,20 @@ func runLinuxUI(in *os.File, out io.Writer, config, exe string, system bool,
 						return e
 					}
 					fmt.Fprintln(out, "已登出。")
+				case "tray-on", "tray-off":
+					if choice == "tray-on" {
+						if e := linuxCredentials(*cfg); e != nil {
+							return e
+						}
+					}
+					if e := linuxSetTray(exe, config, choice == "tray-on"); e != nil {
+						return e
+					}
+					if choice == "tray-on" {
+						fmt.Fprintln(out, "托盘图标已开启。")
+					} else {
+						fmt.Fprintln(out, "托盘图标已关闭，校园网连接保持不变。")
+					}
 				case "background":
 					if e := linuxCredentials(*cfg); e != nil {
 						return e

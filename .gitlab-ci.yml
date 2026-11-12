@@ -65,7 +65,10 @@ test_linux:
     - go vet ./...
     - apt-get update && apt-get install --yes --no-install-recommends python3
     - PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/recipes -v
+    - PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/homebrew -v
+    - PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/completions -v
     - bash scripts/package-sandbox.sh test
+    - bash scripts/test-release-assets.sh
     - for script in scripts/*.sh; do bash -n "$script"; done
     - |
       files=$(gofmt -l cmd internal libauth/requests.go)
@@ -105,9 +108,9 @@ build_release:
     - VERSION="${CI_COMMIT_TAG:-0.0.0-dev}" bash scripts/package-distributions.sh
     - |
       if [ "${ENABLE_MACOS_RUNNER:-false}" = true ]; then
-        REQUIRE_MACOS_DMG=1 bash scripts/package-release.sh
+        VERSION="${CI_COMMIT_TAG:-0.0.0-dev}" REQUIRE_MACOS_DMG=1 bash scripts/package-release.sh
       else
-        bash scripts/package-release.sh
+        VERSION="${CI_COMMIT_TAG:-0.0.0-dev}" bash scripts/package-release.sh
       fi
   artifacts:
     name: 'authingnyist-$CI_COMMIT_REF_SLUG'

@@ -39,11 +39,14 @@ jobs:
           files=$(gofmt -l cmd internal libauth/requests.go)
           if [ -n "$files" ]; then printf '%s\n' "$files"; exit 1; fi
           for script in scripts/*.sh; do bash -n "$script"; done
-      - name: Test package recipe generation
+      - name: Test packaging, cask, completions, and release allowlist
         if: runner.os == 'Linux'
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/recipes -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/homebrew -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/completions -v
           bash scripts/package-sandbox.sh test
+          bash scripts/test-release-assets.sh
       - name: Race test shared core and platform
         if: runner.os == 'Linux'
         run: go test -race ./internal/...
@@ -124,6 +127,7 @@ jobs:
         run: bash scripts/package-distributions.sh
       - name: Package and verify checksums
         env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '0.0.0-dev' }}
           REQUIRE_MACOS_DMG: '1'
         run: bash scripts/package-release.sh
       - name: Upload release bundle
@@ -131,20 +135,11 @@ jobs:
         with:
           name: release-bundle
           path: |
-            dist/nyist-connect*
-            dist/NYIST-Connect-macos-*.dmg
-            dist/README.md
-            dist/NYIST-CONNECT.md
-            dist/PACKAGING.md
-            dist/LICENSE
-            dist/SHA256SUMS.txt
             dist/release-assets.txt
+            dist/SHA256SUMS.txt
+            dist/*.exe
+            dist/NYIST-Connect-macos-*.dmg
             dist/*.deb
             dist/*.rpm
-            dist/*.pkg.tar.zst
-            dist/authingnyist-*.tar.gz
-            dist/nyist-connect-aur-*.tar.gz
-            dist/*.flatpak
-            dist/*.snap
           retention-days: 14
           if-no-files-found: error
