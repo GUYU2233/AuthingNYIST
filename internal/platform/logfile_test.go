@@ -8,6 +8,25 @@ import (
 	"testing"
 )
 
+// requirePrivateLogMode asserts the 0600 POSIX mode that rotation enforces.
+// Windows only models a read-only bit, so os.Chmod there cannot produce 0600
+// and Stat reports 0666/0444 instead; the rotation path is the Linux/macOS
+// daemon log, so the mode assertion is skipped rather than testing a value the
+// platform cannot express.
+func requirePrivateLogMode(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("%s mode = %04o, want 0600", filepath.Base(path), info.Mode().Perm())
+	}
+}
+
 func TestOpenDaemonLogBelowLimitDoesNotRotate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nyist-daemon.log")
@@ -57,9 +76,7 @@ func TestOpenDaemonLogAboveLimitRotates(t *testing.T) {
 	if rotated.Size() != int64(len(old)) {
 		t.Fatalf("rotated size = %d, want %d", rotated.Size(), len(old))
 	}
-	if rotated.Mode().Perm() != 0600 {
-		t.Fatalf("rotated mode = %04o, want 0600", rotated.Mode().Perm())
-	}
+	requirePrivateLogMode(t, path+".1")
 	fresh, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -67,9 +84,7 @@ func TestOpenDaemonLogAboveLimitRotates(t *testing.T) {
 	if fresh.Size() != 0 {
 		t.Fatalf("fresh log size = %d, want 0", fresh.Size())
 	}
-	if fresh.Mode().Perm() != 0600 {
-		t.Fatalf("fresh log mode = %04o, want 0600", fresh.Mode().Perm())
-	}
+	requirePrivateLogMode(t, path)
 }
 
 func TestOpenDaemonLogReplacesOlderRotatedFile(t *testing.T) {
@@ -110,13 +125,7 @@ func TestOpenDaemonLogEnforcesMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("mode = %04o, want 0600", info.Mode().Perm())
-	}
+	requirePrivateLogMode(t, path)
 }
 
 func TestOpenDaemonLogTwiceKeepsAppending(t *testing.T) {

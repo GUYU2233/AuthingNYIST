@@ -30,7 +30,29 @@ jobs:
           go mod download
           go mod verify
       - name: Test
-        run: go test -count=1 ./...
+        shell: bash
+        run: |
+          go test -count=1 ./... 2>&1 | tee test-output.log
+          test "${PIPESTATUS[0]}" -eq 0
+      - name: Annotate failing tests
+        if: failure()
+        shell: bash
+        run: |
+          # Public check runs only expose annotations, so surface the failing
+          # test names here instead of relying on login-only job logs.
+          grep -E '^(--- FAIL|FAIL[[:space:]]|    --- FAIL)' test-output.log |
+            sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g' |
+            while IFS= read -r line; do
+              echo "::error title=go test::${line}"
+            done || true
+          exit 1
+      - name: Upload test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-output-${{ matrix.os }}
+          path: test-output.log
+          if-no-files-found: ignore
       - name: Vet
         run: go vet ./...
       - name: Check formatting and shell syntax
